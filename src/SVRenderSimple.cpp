@@ -185,24 +185,37 @@ void SVRenderSimple::setupQuad() {
 void SVRenderSimple::setupCarModel(const std::string& model_path,
                                    const std::string& vert_shader,
                                    const std::string& frag_shader) {
-    return;
+    std::cout << "Loading 3D car model..." << std::endl;
+    std::cout << "  Model: " << model_path << std::endl;
+    std::cout << "  Vertex shader: " << vert_shader << std::endl;
+    std::cout << "  Fragment shader: " << frag_shader << std::endl;
+    
     // Load car model
-    car_model = std::make_unique<Model>(model_path);
+    try {
+        car_model = std::make_unique<Model>(model_path);
+        std::cout << "  ✓ Car model loaded successfully" << std::endl;
+    } catch (const std::exception& e) {
+        std::cerr << "  ✗ Failed to load car model: " << e.what() << std::endl;
+        return;
+    }
     
     // Load car shader
     car_shader = std::make_unique<OGLShader>();
     if (!car_shader->loadFromFile(vert_shader, frag_shader)) {
-        std::cerr << "Warning: Failed to load car shaders, will skip car rendering" << std::endl;
+        std::cerr << "  ✗ Failed to load car shaders, will skip car rendering" << std::endl;
         car_model.reset();
         return;
     }
+    std::cout << "  ✓ Car shaders loaded successfully" << std::endl;
     
     // Setup car transform (centered, scaled appropriately)
     car_transform = glm::mat4(1.0f);
-    car_transform = glm::translate(car_transform, glm::vec3(0.0f, 0.0f, 0.0f));
-    car_transform = glm::rotate(car_transform, glm::radians(-90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+    car_transform = glm::translate(car_transform, glm::vec3(0.0f, 2.1f, 0.0f));  // Lower the car
+    car_transform = glm::rotate(car_transform, glm::radians(-20.0f), glm::vec3(1.0f, 0.0f, 0.0f));  // Pitch
     car_transform = glm::rotate(car_transform, glm::radians(180.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-    car_transform = glm::scale(car_transform, glm::vec3(0.003f));
+
+    car_transform = glm::scale(car_transform, glm::vec3(0.014f));  // Smaller scale
+    std::cout << "  ✓ Car transform configured" << std::endl;
 }
 
 void SVRenderSimple::createTextureShader() {
@@ -609,6 +622,9 @@ void SVRenderSimple::drawCameraView(unsigned int texture_id, int x, int y, int w
 // └────────────┴──────────────────┴────────────┘
 //    576px         768px            576px
 //////////////////////////
+// COMPLETE REPLACEMENT for the render() function in SVRenderSimple.cpp
+// This version draws the car FIRST, then cameras around it
+
 bool SVRenderSimple::render(const std::array<cv::cuda::GpuMat, 4>& camera_frames) {
     if (!is_init) return false;
     
@@ -619,55 +635,59 @@ bool SVRenderSimple::render(const std::array<cv::cuda::GpuMat, 4>& camera_frames
         }
     }
     
-    // Clear screen
+    // Clear entire screen
     glClearColor(0.05f, 0.05f, 0.05f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     
-    // ============================================================
-    // CROSS LAYOUT - Cameras around center car area
-    // ============================================================
+    // Layout calculations
+    int side_width = screen_width * 0.30;    // 576
+    int center_width = screen_width * 0.40;  // 768
+    int row_height = screen_height / 3;      // 360
     
-    // Horizontal division: 30% | 40% | 30%
-    int side_width = screen_width * 0.30;    // 576 pixels (30%)
-    int center_width = screen_width * 0.40;  // 768 pixels (40%)
-    
-    // Vertical division: 33% each row
-    int row_height = screen_height / 3;      // 360 pixels per row
-    
-    glDisable(GL_DEPTH_TEST);
-    
-    // Layout:
-    //          [   FRONT   ]
-    // [LEFT]   [   CAR    ]   [RIGHT]
-    //          [   REAR    ]
-    
-    // Front camera (top center) - STRETCHED to fill viewport
-    drawCameraView(camera_textures[0], 
-                   side_width, screen_height * 2 / 3,   // x, y
-                   center_width, row_height);            // width, height
-    
-    // Left camera (middle left) - STRETCHED to fill viewport
-    drawCameraView(camera_textures[1], 
-                   0, row_height,                        // x, y
-                   side_width, row_height);              // width, height
-    
-    // Rear camera (bottom center) - STRETCHED to fill viewport
-    drawCameraView(camera_textures[2], 
-                   side_width, 0,                        // x, y
-                   center_width, row_height);            // width, height
-    
-    // Right camera (middle right) - STRETCHED to fill viewport
-    drawCameraView(camera_textures[3], 
-                   side_width + center_width, row_height, // x, y
-                   side_width, row_height);               // width, height
+    // Debug output once
+    static bool debug_once = false;
+    if (!debug_once) {
+        std::cout << "\n=== RENDER LAYOUT DEBUG ===" << std::endl;
+        std::cout << "Screen: " << screen_width << "x" << screen_height << std::endl;
+        std::cout << "Side width: " << side_width << ", Center width: " << center_width 
+                  << ", Row height: " << row_height << std::endl;
+        std::cout << "Front cam: (" << side_width << ", " << (screen_height * 2 / 3) 
+                  << ") size " << center_width << "x" << row_height << std::endl;
+        std::cout << "Left cam: (0, " << row_height << ") size " 
+                  << side_width << "x" << row_height << std::endl;
+        std::cout << "Rear cam: (" << side_width << ", 0) size " 
+                  << center_width << "x" << row_height << std::endl;
+        std::cout << "Right cam: (" << (side_width + center_width) << ", " << row_height 
+                  << ") size " << side_width << "x" << row_height << std::endl;
+        std::cout << "CAR viewport: (" << side_width << ", " << row_height 
+                  << ") size " << center_width << "x" << row_height << std::endl;
+        std::cout << "Car model ptr: " << (car_model ? "VALID" : "NULL") << std::endl;
+        std::cout << "Car shader ptr: " << (car_shader ? "VALID" : "NULL") << std::endl;
+        std::cout << "========================\n" << std::endl;
+        debug_once = true;
+    }
     
     // ============================================================
-    // CENTER CAR RENDERING AREA (when you add car model back)
+    // STEP 1: Draw 3D CAR FIRST (in center)
     // ============================================================
     if (car_model && car_shader) {
-        glEnable(GL_DEPTH_TEST);
+        std::cout << "Drawing car..." << std::endl;  // This will print every frame
+        
+        // Set viewport for center
         glViewport(side_width, row_height, center_width, row_height);
         
+        // Clear only this viewport
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(side_width, row_height, center_width, row_height);
+        glClearColor(0.2f, 0.2f, 0.3f, 1.0f);  // Blue-ish background to see it clearly
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        glDisable(GL_SCISSOR_TEST);
+        
+        // Enable 3D rendering
+        glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_LESS);
+        
+        // Setup camera and projection
         glm::mat4 view = camera.getView();
         glm::mat4 projection = glm::perspective(
             glm::radians(camera.zoom), 
@@ -675,6 +695,7 @@ bool SVRenderSimple::render(const std::array<cv::cuda::GpuMat, 4>& camera_frames
             0.1f, 100.0f
         );
         
+        // Render car
         car_shader->use();
         car_shader->setMat4("model", car_transform);
         car_shader->setMat4("view", view);
@@ -682,11 +703,41 @@ bool SVRenderSimple::render(const std::array<cv::cuda::GpuMat, 4>& camera_frames
         car_shader->setVec3("lightPos", glm::vec3(5.0f, 10.0f, 5.0f));
         car_shader->setVec3("viewPos", camera.position);
         car_shader->setVec3("lightColor", glm::vec3(1.0f, 1.0f, 1.0f));
-        car_shader->setVec3("objectColor", glm::vec3(0.2f, 0.2f, 0.8f));
+        car_shader->setVec3("objectColor", glm::vec3(0.8f, 0.2f, 0.2f));  // Red car
         
         Shader& shader_ref = *reinterpret_cast<Shader*>(car_shader.get());
         car_model->Draw(shader_ref);
+        
+        std::cout << "Car drawn!" << std::endl;
+    } else {
+        std::cout << "Car NOT drawn - model=" << (car_model ? "OK" : "NULL") 
+                  << " shader=" << (car_shader ? "OK" : "NULL") << std::endl;
     }
+    
+    // ============================================================
+    // STEP 2: Draw cameras AROUND the car
+    // ============================================================
+    glDisable(GL_DEPTH_TEST);  // Cameras are 2D overlays
+    
+    // Front camera (top center)
+    drawCameraView(camera_textures[0], 
+                   side_width, screen_height * 2 / 3,
+                   center_width, row_height);
+    
+    // Left camera (middle left)
+    drawCameraView(camera_textures[1], 
+                   0, row_height,
+                   side_width, row_height);
+    
+    // Rear camera (bottom center)
+    drawCameraView(camera_textures[2], 
+                   side_width, 0,
+                   center_width, row_height);
+    
+    // Right camera (middle right)
+    drawCameraView(camera_textures[3], 
+                   side_width + center_width, row_height,
+                   side_width, row_height);
     
     // Restore full viewport
     glViewport(0, 0, screen_width, screen_height);

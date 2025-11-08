@@ -28,6 +28,7 @@ int main(int argc, char** argv) {
         std::cerr << "✗ cv::cuda::remap FAILED: " << e.what() << std::endl;
     }
     
+    
     // Setup signal handler
     signal(SIGINT, signalHandler);
     signal(SIGTERM, signalHandler);

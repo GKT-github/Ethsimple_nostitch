@@ -100,6 +100,7 @@ private:
     std::array<unsigned int, 4> camera_textures;
     std::array<unsigned int, 4> camera_pbos;
     
+    
     bool is_init;
 };
 

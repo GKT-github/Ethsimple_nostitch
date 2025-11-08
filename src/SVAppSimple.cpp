@@ -96,9 +96,9 @@ bool SVAppSimple::init() {
     renderer = std::make_shared<SVRenderSimple>(1920, 1080);
     
     if (!renderer->init(
-        "models/Dodge Challenger SRT Hellcat 2015.obj",
-        "shaders/carshadervert.glsl",
-        "shaders/carshaderfrag.glsl")) {
+        "../models/Dodge Challenger SRT Hellcat 2015.obj",
+        "../shaders/carshadervert.glsl",
+        "../shaders/carshaderfrag.glsl")) {
         std::cerr << "ERROR: Failed to initialize renderer" << std::endl;
         return false;
     }
