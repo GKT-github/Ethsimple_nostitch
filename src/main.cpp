@@ -1,6 +1,8 @@
 #include "SVAppSimple.hpp"
 #include <iostream>
 #include <csignal>
+#include <opencv2/cudawarping.hpp>   
+#include <opencv2/imgproc.hpp>        
 
 volatile bool g_running = true;
 
@@ -14,6 +16,17 @@ int main(int argc, char** argv) {
     std::cout << "Ultra-Simple 4-Camera Display System" << std::endl;
     std::cout << "Direct Feed - No Stitching" << std::endl;
     std::cout << "========================================" << std::endl;
+
+    cv::cuda::GpuMat test_in(100, 100, CV_8UC3);
+    cv::cuda::GpuMat test_out;
+    cv::cuda::GpuMat test_map_x(100, 100, CV_32F);
+    cv::cuda::GpuMat test_map_y(100, 100, CV_32F);
+    try {
+        cv::cuda::remap(test_in, test_out, test_map_x, test_map_y, cv::INTER_LINEAR);
+        std::cout << "✓ cv::cuda::remap is working!" << std::endl;
+    } catch (const cv::Exception& e) {
+        std::cerr << "✗ cv::cuda::remap FAILED: " << e.what() << std::endl;
+    }
     
     // Setup signal handler
     signal(SIGINT, signalHandler);

@@ -6,6 +6,9 @@
 #include <GL/glext.h>
 #include <GLFW/glfw3.h>
 #include <iostream>
+// ✅ ADD THESE LINES:
+#include <opencv2/cudawarping.hpp>   // For cv::cuda::remap
+#include <opencv2/imgproc.hpp>        // For cv::INTER_LINEAR
 
 // Simple quad vertices for texture display
 static const float quadVertices[] = {
@@ -90,7 +93,8 @@ bool SVRenderSimple::init(const std::string& car_model_path,
                           const std::string& car_frag_shader) {
     
     std::cout << "Initializing simplified 4-camera renderer..." << std::endl;
-    
+    // std::cout << "=== RENDERER INITIALIZATION ===" << std::endl;
+    // std::cout << "Screen dimensions: " << screen_width << " x " << screen_height << std::endl;
     // Initialize GLFW
     if (!glfwInit()) {
         std::cerr << "Failed to initialize GLFW" << std::endl;
@@ -181,7 +185,7 @@ void SVRenderSimple::setupQuad() {
 void SVRenderSimple::setupCarModel(const std::string& model_path,
                                    const std::string& vert_shader,
                                    const std::string& frag_shader) {
-                                   return;
+    return;
     // Load car model
     car_model = std::make_unique<Model>(model_path);
     
@@ -261,41 +265,170 @@ void SVRenderSimple::uploadTexture(const cv::cuda::GpuMat& frame, unsigned int t
             break;
         }
     }
+    // ============================================================
+    // FLIP PROCESSING
+    // ============================================================
+    cv::cuda::GpuMat processed_frame;
+    
+    if (pbo_idx == 0) {
+        // Front camera: Flip horizontally
+        // Create flip maps (only once, cache them as static)
+        static cv::cuda::GpuMat map_x, map_y;
+        static cv::Size last_size(0, 0);
+
+        if (map_x.empty()) {
+            cv::Mat cpu_map_x(frame.rows, frame.cols, CV_32F);
+            cv::Mat cpu_map_y(frame.rows, frame.cols, CV_32F);
+            
+            for (int y = 0; y < frame.rows; y++) {
+            for (int x = 0; x < frame.cols; x++) {
+                cpu_map_x.at<float>(y, x) = x;                    // Keep X same
+                cpu_map_y.at<float>(y, x) = frame.rows - 1 - y;  // Flip Y
+                }
+            }
+            
+            map_x.upload(cpu_map_x);
+            map_y.upload(cpu_map_y);
+            last_size = frame.size();
+        }
+        cv::cuda::remap(frame, processed_frame, map_x, map_y, cv::INTER_LINEAR);
+        
+    } else if (pbo_idx == 1) {
+        // Left camera: Rotate 90° ccounter -clockwise
+        static cv::cuda::GpuMat map_x, map_y;
+        static cv::Size last_size(0, 0);
+        if (map_x.empty()) {
+            // Output size will be swapped (width <-> height)
+            cv::Mat cpu_map_x(frame.cols, frame.rows, CV_32F);  // Note: swapped!
+            cv::Mat cpu_map_y(frame.cols, frame.rows, CV_32F);
+            
+            for (int y = 0; y < frame.cols; y++) {
+                for (int x = 0; x < frame.rows; x++) {
+                    cpu_map_x.at<float>(y, x) =  y;  // New X = flipped old Y
+                    cpu_map_y.at<float>(y, x) =  x;   // New Y = old X
+                }
+            }
+
+            
+            map_x.upload(cpu_map_x);
+            map_y.upload(cpu_map_y);
+            last_size = frame.size();
+        }
+        cv::cuda::remap(frame, processed_frame, map_x, map_y, cv::INTER_LINEAR);
+        
+    } 
+    
+    else if (pbo_idx == 3) {
+        // Right camera: Rotate 90° clockwise + vertical flip
+        static cv::cuda::GpuMat map_x, map_y;
+        static cv::Size last_size(0, 0);
+        
+        if (map_x.empty() || last_size != frame.size()) {
+            // Output size will be swapped (width <-> height)
+            cv::Mat cpu_map_x(frame.cols, frame.rows, CV_32F);  // Note: swapped!
+            cv::Mat cpu_map_y(frame.cols, frame.rows, CV_32F);
+            
+            for (int y = 0; y < frame.cols; y++) {
+                for (int x = 0; x < frame.rows; x++) {
+                    // 90° CW + vertical flip
+                    cpu_map_x.at<float>(y, x) = frame.cols - 1 - y;  // Flipped old Y
+                    cpu_map_y.at<float>(y, x) = frame.rows - 1 - x;  // Flipped old X
+                }
+            }
+            
+            map_x.upload(cpu_map_x);
+            map_y.upload(cpu_map_y);
+            last_size = frame.size();
+        }
+        cv::cuda::remap(frame, processed_frame, map_x, map_y, cv::INTER_LINEAR);
+    }
+    else if (pbo_idx == 2) {
+    // Rear camera: Flip horizontally
+    static cv::cuda::GpuMat map_x, map_y;
+    static cv::Size last_size(0, 0);
+    
+    if (map_x.empty() || last_size != frame.size()) {
+        cv::Mat cpu_map_x(frame.rows, frame.cols, CV_32F);
+        cv::Mat cpu_map_y(frame.rows, frame.cols, CV_32F);
+        
+        for (int y = 0; y < frame.rows; y++) {
+            for (int x = 0; x < frame.cols; x++) {
+                cpu_map_x.at<float>(y, x) = frame.cols - 1 - x;  // Flip X
+                cpu_map_y.at<float>(y, x) = y;                    // Keep Y
+            }
+        }
+        
+        map_x.upload(cpu_map_x);
+        map_y.upload(cpu_map_y);
+        last_size = frame.size();
+    }
+    cv::cuda::remap(frame, processed_frame, map_x, map_y, cv::INTER_LINEAR);
+    }
+    else {
+        // Rear camera (index 2): no transformation
+        processed_frame = frame;
+    }
+    // ============================================================
     
     // Download from GPU to PBO
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, camera_pbos[pbo_idx]);
     void* ptr = glMapBufferRange(GL_PIXEL_UNPACK_BUFFER, 0, 
-                                  frame.cols * frame.rows * 3,
+                                  processed_frame.cols * processed_frame.rows * 3,  // ✅ FIXED
                                   GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT);
     
     if (ptr) {
-        cv::Mat cpu_frame(frame.rows, frame.cols, CV_8UC3, ptr);
-        frame.download(cpu_frame);
+        cv::Mat cpu_frame(processed_frame.rows, processed_frame.cols, CV_8UC3, ptr);  // ✅ FIXED
+        processed_frame.download(cpu_frame);  // ✅ FIXED
         glUnmapBuffer(GL_PIXEL_UNPACK_BUFFER);
     }
     
     // Upload to texture
     glBindTexture(GL_TEXTURE_2D, texture_id);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, frame.cols, frame.rows,
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, processed_frame.cols, processed_frame.rows,  // ✅ FIXED
                  0, GL_BGR, GL_UNSIGNED_BYTE, 0);
     
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
 }
 
+// void SVRenderSimple::drawCameraView(unsigned int texture_id, int x, int y, int w, int h) {
+//     // Set viewport for this camera
+//     glViewport(x, y, w, h);
+    
+//     // Calculate NDC transform
+//     float screen_x = (float)x / screen_width;
+//     float screen_y = (float)y / screen_height;
+//     float screen_w = (float)w / screen_width;
+//     float screen_h = (float)h / screen_height;
+    
+//     // Create transform matrix (NDC space)
+//     glm::mat4 transform = glm::mat4(1.0f);
+//     transform = glm::translate(transform, glm::vec3(-1.0f + screen_w, -1.0f + screen_h, 0.0f));
+//     transform = glm::scale(transform, glm::vec3(screen_w, screen_h, 1.0f));
+    
+//     // Use texture shader
+//     texture_shader->use();
+//     texture_shader->setMat4("transform", transform);
+    
+//     // Bind texture
+//     glActiveTexture(GL_TEXTURE0);
+//     glBindTexture(GL_TEXTURE_2D, texture_id);
+//     texture_shader->setInt("texture1", 0);
+    
+//     // Draw quad
+//     glBindVertexArray(quad_VAO);
+//     glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+//     glBindVertexArray(0);
+// }
 void SVRenderSimple::drawCameraView(unsigned int texture_id, int x, int y, int w, int h) {
     // Set viewport for this camera
     glViewport(x, y, w, h);
     
-    // Calculate NDC transform
-    float screen_x = (float)x / screen_width;
-    float screen_y = (float)y / screen_height;
-    float screen_w = (float)w / screen_width;
-    float screen_h = (float)h / screen_height;
-    
-    // Create transform matrix (NDC space)
-    glm::mat4 transform = glm::mat4(1.0f);
-    transform = glm::translate(transform, glm::vec3(-1.0f + screen_w, -1.0f + screen_h, 0.0f));
-    transform = glm::scale(transform, glm::vec3(screen_w, screen_h, 1.0f));
+    // ============================================================
+    // STRETCH TO FILL - No aspect ratio preservation
+    // ============================================================
+    glm::mat4 transform = glm::mat4(1.0f);  // Identity matrix
+    // Quad vertices already cover -1 to +1 NDC space
+    // This stretches texture to completely fill viewport
     
     // Use texture shader
     texture_shader->use();
@@ -312,6 +445,170 @@ void SVRenderSimple::drawCameraView(unsigned int texture_id, int x, int y, int w
     glBindVertexArray(0);
 }
 
+// bool SVRenderSimple::render(const std::array<cv::cuda::GpuMat, 4>& camera_frames) {
+//     if (!is_init) return false;
+    
+//     // Upload all camera textures
+//     for (int i = 0; i < 4; i++) {
+//         if (!camera_frames[i].empty()) {
+//             uploadTexture(camera_frames[i], camera_textures[i]);
+//         }
+//     }
+    
+//     // Clear screen
+//     glClearColor(0.05f, 0.05f, 0.05f, 1.0f);
+//     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    
+//     // ============================================================
+//     // LARGER LAYOUT - Make cameras fill more screen space
+//     // ============================================================
+    
+//     // Side cameras take 30% width, center area takes 40% width
+//     int side_width = screen_width * 0.30;      // 30% for left/right
+//     int center_width = screen_width * 0.40;    // 40% for center
+    
+//     // Vertical: each row gets equal space
+//     int row_height = screen_height / 3;        // Each row = 1/3 height
+    
+//     // Disable depth test for 2D camera views
+//     glDisable(GL_DEPTH_TEST);
+    
+//     // Draw camera views:
+//     // Layout (with bigger cameras):
+//     //            [Front - BIGGER]
+//     // [Left-BIG]    [empty]     [Right-BIG]
+//     //            [Rear - BIGGER]
+    
+//     // Front camera (top center) - BIGGER
+//     drawCameraView(camera_textures[0], 
+//                    side_width, screen_height * 2 / 3, 
+//                    center_width, row_height);
+    
+//     // Left camera (middle left) - BIGGER
+//     drawCameraView(camera_textures[1], 
+//                    0, screen_height / 3, 
+//                    side_width, row_height);
+    
+//     // Rear camera (bottom center) - BIGGER
+//     drawCameraView(camera_textures[2], 
+//                    side_width, 0, 
+//                    center_width, row_height);
+    
+//     // Right camera (middle right) - BIGGER
+//     drawCameraView(camera_textures[3], 
+//                    side_width + center_width, screen_height / 3, 
+//                    side_width, row_height);
+    
+//     // No car model rendering (disabled)
+    
+//     // Swap buffers
+//     glfwSwapBuffers(window);
+//     glfwPollEvents();
+    
+//     return true;
+// }
+
+///////////////////////Test render function to render one full camera output
+// bool SVRenderSimple::render(const std::array<cv::cuda::GpuMat, 4>& camera_frames) {
+//     if (!is_init) return false;
+    
+//     // Upload all camera textures
+//     for (int i = 0; i < 4; i++) {
+//         if (!camera_frames[i].empty()) {
+//             uploadTexture(camera_frames[i], camera_textures[i]);
+//         }
+//     }
+    
+//     // Clear screen
+//     glClearColor(0.05f, 0.05f, 0.05f, 1.0f);
+//     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+//     glDisable(GL_DEPTH_TEST);
+    
+//     // TEST: Show ONLY front camera FULLSCREEN
+//     std::cout << "Drawing fullscreen camera at 0,0 with size " 
+//               << screen_width << "x" << screen_height << std::endl;
+    
+//     drawCameraView(camera_textures[2], 
+//                    0, 0,                      // Start at 0,0
+//                    screen_width, screen_height);  // Fill entire window
+    
+//     glfwSwapBuffers(window);
+//     glfwPollEvents();
+    
+//     return true;
+// }
+
+// // //////////////////////////test render function to render 2x2 grid 
+// bool SVRenderSimple::render(const std::array<cv::cuda::GpuMat, 4>& camera_frames) {
+//     if (!is_init) return false;
+    
+//     // Upload all camera textures
+//     for (int i = 0; i < 4; i++) {
+//         if (!camera_frames[i].empty()) {
+//             uploadTexture(camera_frames[i], camera_textures[i]);
+//         }
+//     }
+    
+//     // Clear screen
+//     glClearColor(0.05f, 0.05f, 0.05f, 1.0f);
+//     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+//     glDisable(GL_DEPTH_TEST);
+    
+//     // ============================================================
+//     // 2x2 GRID LAYOUT - Each camera gets 1/4 of screen
+//     // Screen: 1920x1080 → Each camera: 960x540
+//     // ============================================================
+//     int half_width = screen_width / 2;   // 960
+//     int half_height = screen_height / 2; // 540
+    
+//     // Layout:
+//     // [Front 0,540]  [Right 960,540]
+//     // [Left  0,0  ]  [Rear  960,0  ]
+    
+//     // Front camera (top-left)
+//     drawCameraView(camera_textures[0], 
+//                    0, half_height,        // x=0, y=540
+//                    half_width, half_height); // w=960, h=540
+    
+//     // Right camera (top-right)
+//     drawCameraView(camera_textures[3], 
+//                    half_width, half_height,  // x=960, y=540
+//                    half_width, half_height); // w=960, h=540
+    
+//     // Left camera (bottom-left)
+//     drawCameraView(camera_textures[1], 
+//                    0, 0,                  // x=0, y=0
+//                    half_width, half_height); // w=960, h=540
+    
+//     // Rear camera (bottom-right)
+//     drawCameraView(camera_textures[2], 
+//                    half_width, 0,         // x=960, y=0
+//                    half_width, half_height); // w=960, h=540
+    
+//     glfwSwapBuffers(window);
+//     glfwPollEvents();
+    
+//     return true;
+// }
+
+// ////////////Screen: 1920×1080
+
+// ┌────────────┬──────────────────┬────────────┐
+// │            │                  │            │
+// │            │  FRONT (0)       │            │
+// │            │  768×360         │            │  ← Top row (360px)
+// │            │  STRETCHED       │            │
+// ├────────────┼──────────────────┼────────────┤
+// │ LEFT (1)   │                  │ RIGHT (3)  │
+// │ 576×360    │  CAR AREA        │ 576×360    │  ← Middle row (360px)
+// │ STRETCHED  │  768×360         │ STRETCHED  │
+// ├────────────┼──────────────────┼────────────┤
+// │            │  REAR (2)        │            │
+// │            │  768×360         │            │  ← Bottom row (360px)
+// │            │  STRETCHED       │            │
+// └────────────┴──────────────────┴────────────┘
+//    576px         768px            576px
+//////////////////////////
 bool SVRenderSimple::render(const std::array<cv::cuda::GpuMat, 4>& camera_frames) {
     if (!is_init) return false;
     
@@ -326,50 +623,57 @@ bool SVRenderSimple::render(const std::array<cv::cuda::GpuMat, 4>& camera_frames
     glClearColor(0.05f, 0.05f, 0.05f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     
-    // Calculate layout dimensions
-    int cam_width = screen_width / 4;
-    int cam_height = screen_height / 3;
-    int center_width = screen_width / 2;
-    int center_height = screen_height / 3;
+    // ============================================================
+    // CROSS LAYOUT - Cameras around center car area
+    // ============================================================
     
-    // Disable depth test for 2D camera views
+    // Horizontal division: 30% | 40% | 30%
+    int side_width = screen_width * 0.30;    // 576 pixels (30%)
+    int center_width = screen_width * 0.40;  // 768 pixels (40%)
+    
+    // Vertical division: 33% each row
+    int row_height = screen_height / 3;      // 360 pixels per row
+    
     glDisable(GL_DEPTH_TEST);
     
-    // Draw camera views:
     // Layout:
-    //     [Front - top center]
-    // [Left] [Car - center] [Right]
-    //     [Rear - bottom center]
+    //          [   FRONT   ]
+    // [LEFT]   [   CAR    ]   [RIGHT]
+    //          [   REAR    ]
     
-    // Front camera (top center)
+    // Front camera (top center) - STRETCHED to fill viewport
     drawCameraView(camera_textures[0], 
-                   screen_width / 4, screen_height * 2 / 3, 
-                   center_width, cam_height);
+                   side_width, screen_height * 2 / 3,   // x, y
+                   center_width, row_height);            // width, height
     
-    // Left camera (middle left)
+    // Left camera (middle left) - STRETCHED to fill viewport
     drawCameraView(camera_textures[1], 
-                   0, screen_height / 3, 
-                   cam_width, center_height);
+                   0, row_height,                        // x, y
+                   side_width, row_height);              // width, height
     
-    // Rear camera (bottom center)
+    // Rear camera (bottom center) - STRETCHED to fill viewport
     drawCameraView(camera_textures[2], 
-                   screen_width / 4, 0, 
-                   center_width, cam_height);
+                   side_width, 0,                        // x, y
+                   center_width, row_height);            // width, height
     
-    // Right camera (middle right)
+    // Right camera (middle right) - STRETCHED to fill viewport
     drawCameraView(camera_textures[3], 
-                   screen_width * 3 / 4, screen_height / 3, 
-                   cam_width, center_height);
+                   side_width + center_width, row_height, // x, y
+                   side_width, row_height);               // width, height
     
-    // Draw 3D car in center
-    glEnable(GL_DEPTH_TEST);
-    glViewport(screen_width / 4, screen_height / 3, center_width, center_height);
-    
+    // ============================================================
+    // CENTER CAR RENDERING AREA (when you add car model back)
+    // ============================================================
     if (car_model && car_shader) {
+        glEnable(GL_DEPTH_TEST);
+        glViewport(side_width, row_height, center_width, row_height);
+        
         glm::mat4 view = camera.getView();
-        glm::mat4 projection = glm::perspective(glm::radians(camera.zoom), 
-                                               (float)center_width / center_height, 
-                                               0.1f, 100.0f);
+        glm::mat4 projection = glm::perspective(
+            glm::radians(camera.zoom), 
+            (float)center_width / row_height, 
+            0.1f, 100.0f
+        );
         
         car_shader->use();
         car_shader->setMat4("model", car_transform);
@@ -387,12 +691,13 @@ bool SVRenderSimple::render(const std::array<cv::cuda::GpuMat, 4>& camera_frames
     // Restore full viewport
     glViewport(0, 0, screen_width, screen_height);
     
-    // Swap buffers
     glfwSwapBuffers(window);
     glfwPollEvents();
     
     return true;
 }
+
+
 
 bool SVRenderSimple::shouldClose() const {
     return window && glfwWindowShouldClose(window);
