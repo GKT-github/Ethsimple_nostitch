@@ -1,7 +1,10 @@
 #include "SVAppSimple.hpp"
+#include "SVStitcherSimple.hpp" //needed if you plan to stitch
 #include <iostream>
 #include <thread>
 #include <chrono>
+
+#define ENABLESTITCHING
 
 using namespace std::chrono_literals;
 
@@ -87,23 +90,49 @@ bool SVAppSimple::init() {
         std::cerr << "ERROR: Failed to get valid frames from cameras" << std::endl;
         return false;
     }
-    
-    // ========================================
-    // STEP 3: Initialize Renderer (NO STITCHER!)
-    // ========================================
-    std::cout << "\n[3/3] Initializing 4-camera display renderer..." << std::endl;
-    
-    renderer = std::make_shared<SVRenderSimple>(1920, 1080);
-    
-    if (!renderer->init(
-        "../models/Dodge Challenger SRT Hellcat 2015.obj",
-        "../shaders/carshadervert.glsl",
-        "../shaders/carshaderfrag.glsl")) {
-        std::cerr << "ERROR: Failed to initialize renderer" << std::endl;
-        return false;
-    }
-    
-    std::cout << "  ✓ Renderer ready" << std::endl;
+
+    #ifdef ENABLESTITCHING
+        // Add member variable to class: needed if stitcher code is enabled
+        std::shared_ptr<SVStitcherSimple> stitcher;
+        // ========================================
+        // STEP 3: Initialize Stitcher
+        // ========================================
+        std::cout << "\n[3/4] Initializing stitcher..." << std::endl;
+
+        stitcher = std::make_shared<SVStitcherSimple>();
+
+        // Prepare sample frames
+        std::vector<cv::cuda::GpuMat> sample_frames;
+        for (int i = 0; i < NUM_CAMERAS; i++) {
+            sample_frames.push_back(frames[i].gpuFrame);
+        }
+
+        // Initialize with calibration folder
+        if (!stitcher->initFromFiles("../camparameters", sample_frames)) {
+            std::cerr << "ERROR: Failed to initialize stitcher" << std::endl;
+            return false;
+        }
+
+        std::cout << "  ✓ Stitcher initialized" << std::endl;
+
+    #else
+        // ========================================
+        // STEP 3: Initialize Renderer (NO STITCHER!)
+        // ========================================
+        std::cout << "\n[3/3] Initializing 4-camera display renderer..." << std::endl;
+        
+        renderer = std::make_shared<SVRenderSimple>(1920, 1080);
+        
+        if (!renderer->init(
+            "../models/Dodge Challenger SRT Hellcat 2015.obj",
+            "../shaders/carshadervert.glsl",
+            "../shaders/carshaderfrag.glsl")) {
+            std::cerr << "ERROR: Failed to initialize renderer" << std::endl;
+            return false;
+        }
+        
+        std::cout << "  ✓ Renderer ready" << std::endl;
+    #endif
     
     // ========================================
     // Initialization Complete
@@ -160,17 +189,46 @@ void SVAppSimple::run() {
             continue;
         }
         
-        // Prepare frame array for renderer (just pass GPU frames directly!)
-        std::array<cv::cuda::GpuMat, 4> gpu_frames;
-        for (int i = 0; i < NUM_CAMERAS; i++) {
-            gpu_frames[i] = frames[i].gpuFrame;
-        }
+        #ifdef ENABLESTITCHING
+            // In run() function, replace rendering section with:
+
+            // Prepare frame array
+            std::vector<cv::cuda::GpuMat> gpu_frames;
+            for (int i = 0; i < NUM_CAMERAS; i++) {
+                gpu_frames.push_back(frames[i].gpuFrame);
+            }
+
+            // Stitch into bird's-eye view
+            cv::cuda::GpuMat stitched_output;
+            if (!stitcher->stitch(gpu_frames, stitched_output)) {
+                std::cerr << "ERROR: Stitching failed" << std::endl;
+                continue;
+            }
+
+            // Display the stitched output
+            std::array<cv::cuda::GpuMat, 4> display_frames;
+            display_frames[0] = stitched_output;  // Bird's-eye view
+
+            if (!renderer->render(display_frames)) {
+                std::cerr << "ERROR: Rendering failed" << std::endl;
+                break;
+            }
+
+
+        #else
+            // Prepare frame array for renderer (just pass GPU frames directly!)
+            std::array<cv::cuda::GpuMat, 4> gpu_frames;
+            for (int i = 0; i < NUM_CAMERAS; i++) {
+                gpu_frames[i] = frames[i].gpuFrame;
+            }
+            
+            // Render directly - no stitching!
+            if (!renderer->render(gpu_frames)) {
+                std::cerr << "ERROR: Rendering failed" << std::endl;
+                break;
+            }
+        #endif
         
-        // Render directly - no stitching!
-        if (!renderer->render(gpu_frames)) {
-            std::cerr << "ERROR: Rendering failed" << std::endl;
-            break;
-        }
         
         // FPS calculation and display
         frame_count++;

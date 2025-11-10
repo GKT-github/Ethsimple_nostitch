@@ -10,6 +10,7 @@
 #include <opencv2/cudawarping.hpp>   // For cv::cuda::remap
 #include <opencv2/imgproc.hpp>        // For cv::INTER_LINEAR
 
+#define ENABLESTITCHING
 // Simple quad vertices for texture display
 static const float quadVertices[] = {
     // Positions   // TexCoords
@@ -615,157 +616,184 @@ void SVRenderSimple::drawCameraView(unsigned int texture_id, int x, int y, int w
 //     return true;
 // }
 
-// ////////////Screen: 1920×1080
-
-// ┌────────────┬──────────────────┬────────────┐
-// │            │                  │            │
-// │            │  FRONT (0)       │            │
-// │            │  768×360         │            │  ← Top row (360px)
-// │            │  STRETCHED       │            │
-// ├────────────┼──────────────────┼────────────┤
-// │ LEFT (1)   │                  │ RIGHT (3)  │
-// │ 576×360    │  CAR AREA        │ 576×360    │  ← Middle row (360px)
-// │ STRETCHED  │  768×360         │ STRETCHED  │
-// ├────────────┼──────────────────┼────────────┤
-// │            │  REAR (2)        │            │
-// │            │  768×360         │            │  ← Bottom row (360px)
-// │            │  STRETCHED       │            │
-// └────────────┴──────────────────┴────────────┘
-//    576px         768px            576px
-//////////////////////////
-// COMPLETE REPLACEMENT for the render() function in SVRenderSimple.cpp
-// This version draws the car FIRST, then cameras around it
-
-bool SVRenderSimple::render(const std::array<cv::cuda::GpuMat, 4>& camera_frames) {
-    if (!is_init) return false;
-    
-    // Upload all camera textures
-    for (int i = 0; i < 4; i++) {
-        if (!camera_frames[i].empty()) {
-            uploadTexture(camera_frames[i], camera_textures[i]);
+#ifdef ENABLESTITCHING
+    bool SVRenderSimple::render(const std::array<cv::cuda::GpuMat, 4>& camera_frames) {
+        if (!is_init) return false;
+        
+        // Show bird's-eye view fullscreen
+        if (!camera_frames[0].empty()) {
+            uploadTexture(camera_frames[0], camera_textures[0]);
         }
-    }
-    
-    // Clear entire screen
-    glClearColor(0.05f, 0.05f, 0.05f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    
-    // Layout calculations
-    int side_width = screen_width * 0.30;    // 576
-    int center_width = screen_width * 0.40;  // 768
-    int row_height = screen_height / 3;      // 360
-    
-    // Debug output once
-    static bool debug_once = false;
-    if (!debug_once) {
-        std::cout << "\n=== RENDER LAYOUT DEBUG ===" << std::endl;
-        std::cout << "Screen: " << screen_width << "x" << screen_height << std::endl;
-        std::cout << "Side width: " << side_width << ", Center width: " << center_width 
-                  << ", Row height: " << row_height << std::endl;
-        std::cout << "Front cam: (" << side_width << ", " << (screen_height * 2 / 3) 
-                  << ") size " << center_width << "x" << row_height << std::endl;
-        std::cout << "Left cam: (0, " << row_height << ") size " 
-                  << side_width << "x" << row_height << std::endl;
-        std::cout << "Rear cam: (" << side_width << ", 0) size " 
-                  << center_width << "x" << row_height << std::endl;
-        std::cout << "Right cam: (" << (side_width + center_width) << ", " << row_height 
-                  << ") size " << side_width << "x" << row_height << std::endl;
-        std::cout << "CAR viewport: (" << side_width << ", " << row_height 
-                  << ") size " << center_width << "x" << row_height << std::endl;
-        std::cout << "Car model ptr: " << (car_model ? "VALID" : "NULL") << std::endl;
-        std::cout << "Car shader ptr: " << (car_shader ? "VALID" : "NULL") << std::endl;
-        std::cout << "========================\n" << std::endl;
-        debug_once = true;
-    }
-    
-    // ============================================================
-    // STEP 1: Draw 3D CAR FIRST (in center)
-    // ============================================================
-    if (car_model && car_shader) {
-        // std::cout << "Drawing car..." << std::endl;  // This will print every frame
-        // CRITICAL: Unbind any textures from camera rendering
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, 0);  // Unbind texture
-        // Set viewport for center
-        glViewport(side_width, row_height, center_width, row_height);
         
-        // Clear only this viewport
-        glEnable(GL_SCISSOR_TEST);
-        glScissor(side_width, row_height, center_width, row_height);
-        glClearColor(0.2f, 0.2f, 0.3f, 1.0f);  // Blue-ish background to see it clearly
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        glDisable(GL_SCISSOR_TEST);
+        glDisable(GL_DEPTH_TEST);
         
-        // Enable 3D rendering
-        glEnable(GL_DEPTH_TEST);
-        glDepthFunc(GL_LESS);
+        // Draw bird's-eye view filling entire screen
+        drawCameraView(camera_textures[0], 
+                    0, 0, 
+                    screen_width, screen_height);
         
-        // Setup camera and projection
-        glm::mat4 view = camera.getView();
-        glm::mat4 projection = glm::perspective(
-            glm::radians(camera.zoom), 
-            (float)center_width / row_height, 
-            0.1f, 100.0f
-        );
+        glfwSwapBuffers(window);
+        glfwPollEvents();
         
-        // Render car
-        car_shader->use();
-        car_shader->setMat4("model", car_transform);
-        car_shader->setMat4("view", view);
-        car_shader->setMat4("projection", projection);
-        // CHANGE THESE LIGHTING VALUES:
-        car_shader->setVec3("lightPos", glm::vec3(0.0f, 50.0f, 0.0f));     // Light directly above
-        car_shader->setVec3("viewPos", camera.position);
-        car_shader->setVec3("lightColor", glm::vec3(10.0f, 10.0f, 10.0f)); // MUCH brighter light
-        //car_shader->setVec3("objectColor", glm::vec3(1.0f, 0.0f, 0.0f));   // Bright red
-        car_shader->setVec3("colorTint", glm::vec3(2.0f, 0.5f, 0.5f));  // Red tint
-
-        
-        Shader& shader_ref = *reinterpret_cast<Shader*>(car_shader.get());
-        car_model->Draw(shader_ref);
-        
-        //std::cout << "Car drawn!" << std::endl;
-    } else {
-        std::cout << "Car NOT drawn - model=" << (car_model ? "OK" : "NULL") 
-                  << " shader=" << (car_shader ? "OK" : "NULL") << std::endl;
+        return true;
     }
-    
-    // ============================================================
-    // STEP 2: Draw cameras AROUND the car
-    // ============================================================
-    glDisable(GL_DEPTH_TEST);  // Cameras are 2D overlays
-    
-    // Front camera (top center)
-    drawCameraView(camera_textures[0], 
-                   side_width, screen_height * 2 / 3,
-                   center_width, row_height);
-    
-    // Left camera (middle left)
-    drawCameraView(camera_textures[1], 
-                   0, row_height,
-                   side_width, row_height);
-    
-    // Rear camera (bottom center)
-    drawCameraView(camera_textures[2], 
-                   side_width, 0,
-                   center_width, row_height);
-    
-    // Right camera (middle right)
-    drawCameraView(camera_textures[3], 
-                   side_width + center_width, row_height,
-                   side_width, row_height);
-    
-    // Restore full viewport
-    glViewport(0, 0, screen_width, screen_height);
-    
-    glfwSwapBuffers(window);
-    glfwPollEvents();
-    
-    return true;
-}
+#else
+    ////////////Screen: 1920×1080
+
+    // ┌────────────┬──────────────────┬────────────┐
+    // │            │                  │            │
+    // │            │  FRONT (0)       │            │
+    // │            │  768×360         │            │  ← Top row (360px)
+    // │            │  STRETCHED       │            │
+    // ├────────────┼──────────────────┼────────────┤
+    // │ LEFT (1)   │                  │ RIGHT (3)  │
+    // │ 576×360    │  CAR AREA        │ 576×360    │  ← Middle row (360px)
+    // │ STRETCHED  │  768×360         │ STRETCHED  │
+    // ├────────────┼──────────────────┼────────────┤
+    // │            │  REAR (2)        │            │
+    // │            │  768×360         │            │  ← Bottom row (360px)
+    // │            │  STRETCHED       │            │
+    // └────────────┴──────────────────┴────────────┘
+    // 576px         768px            576px
+    // ////////////////////////
+    // COMPLETE REPLACEMENT for the render() function in SVRenderSimple.cpp
+    // This version draws the car FIRST, then cameras around it
+
+    bool SVRenderSimple::render(const std::array<cv::cuda::GpuMat, 4>& camera_frames) {
+        if (!is_init) return false;
+        
+        // Upload all camera textures
+        for (int i = 0; i < 4; i++) {
+            if (!camera_frames[i].empty()) {
+                uploadTexture(camera_frames[i], camera_textures[i]);
+            }
+        }
+        
+        // Clear entire screen
+        glClearColor(0.05f, 0.05f, 0.05f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        
+        // Layout calculations
+        int side_width = screen_width * 0.30;    // 576
+        int center_width = screen_width * 0.40;  // 768
+        int row_height = screen_height / 3;      // 360
+        
+        // Debug output once
+        static bool debug_once = false;
+        if (!debug_once) {
+            std::cout << "\n=== RENDER LAYOUT DEBUG ===" << std::endl;
+            std::cout << "Screen: " << screen_width << "x" << screen_height << std::endl;
+            std::cout << "Side width: " << side_width << ", Center width: " << center_width 
+                    << ", Row height: " << row_height << std::endl;
+            std::cout << "Front cam: (" << side_width << ", " << (screen_height * 2 / 3) 
+                    << ") size " << center_width << "x" << row_height << std::endl;
+            std::cout << "Left cam: (0, " << row_height << ") size " 
+                    << side_width << "x" << row_height << std::endl;
+            std::cout << "Rear cam: (" << side_width << ", 0) size " 
+                    << center_width << "x" << row_height << std::endl;
+            std::cout << "Right cam: (" << (side_width + center_width) << ", " << row_height 
+                    << ") size " << side_width << "x" << row_height << std::endl;
+            std::cout << "CAR viewport: (" << side_width << ", " << row_height 
+                    << ") size " << center_width << "x" << row_height << std::endl;
+            std::cout << "Car model ptr: " << (car_model ? "VALID" : "NULL") << std::endl;
+            std::cout << "Car shader ptr: " << (car_shader ? "VALID" : "NULL") << std::endl;
+            std::cout << "========================\n" << std::endl;
+            debug_once = true;
+        }
+        
+        // ============================================================
+        // STEP 1: Draw 3D CAR FIRST (in center)
+        // ============================================================
+        if (car_model && car_shader) {
+            // std::cout << "Drawing car..." << std::endl;  // This will print every frame
+            // CRITICAL: Unbind any textures from camera rendering
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, 0);  // Unbind texture
+            // Set viewport for center
+            glViewport(side_width, row_height, center_width, row_height);
+            
+            // Clear only this viewport
+            glEnable(GL_SCISSOR_TEST);
+            glScissor(side_width, row_height, center_width, row_height);
+            glClearColor(0.2f, 0.2f, 0.3f, 1.0f);  // Blue-ish background to see it clearly
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            glDisable(GL_SCISSOR_TEST);
+            
+            // Enable 3D rendering
+            glEnable(GL_DEPTH_TEST);
+            glDepthFunc(GL_LESS);
+            
+            // Setup camera and projection
+            glm::mat4 view = camera.getView();
+            glm::mat4 projection = glm::perspective(
+                glm::radians(camera.zoom), 
+                (float)center_width / row_height, 
+                0.1f, 100.0f
+            );
+            
+            // Render car
+            car_shader->use();
+            car_shader->setMat4("model", car_transform);
+            car_shader->setMat4("view", view);
+            car_shader->setMat4("projection", projection);
+            // CHANGE THESE LIGHTING VALUES:
+            car_shader->setVec3("lightPos", glm::vec3(0.0f, 50.0f, 0.0f));     // Light directly above
+            car_shader->setVec3("viewPos", camera.position);
+            car_shader->setVec3("lightColor", glm::vec3(10.0f, 10.0f, 10.0f)); // MUCH brighter light
+            //car_shader->setVec3("objectColor", glm::vec3(1.0f, 0.0f, 0.0f));   // Bright red
+            car_shader->setVec3("colorTint", glm::vec3(2.0f, 0.5f, 0.5f));  // Red tint
+
+            
+            Shader& shader_ref = *reinterpret_cast<Shader*>(car_shader.get());
+            car_model->Draw(shader_ref);
+            
+            //std::cout << "Car drawn!" << std::endl;
+        } else {
+            std::cout << "Car NOT drawn - model=" << (car_model ? "OK" : "NULL") 
+                    << " shader=" << (car_shader ? "OK" : "NULL") << std::endl;
+        }
+        
+        // ============================================================
+        // STEP 2: Draw cameras AROUND the car
+        // ============================================================
+        glDisable(GL_DEPTH_TEST);  // Cameras are 2D overlays
+        
+        // Front camera (top center)
+        drawCameraView(camera_textures[0], 
+                    side_width, screen_height * 2 / 3,
+                    center_width, row_height);
+        
+        // Left camera (middle left)
+        drawCameraView(camera_textures[1], 
+                    0, row_height,
+                    side_width, row_height);
+        
+        // Rear camera (bottom center)
+        drawCameraView(camera_textures[2], 
+                    side_width, 0,
+                    center_width, row_height);
+        
+        // Right camera (middle right)
+        drawCameraView(camera_textures[3], 
+                    side_width + center_width, row_height,
+                    side_width, row_height);
+        
+        // Restore full viewport
+        glViewport(0, 0, screen_width, screen_height);
+        
+        glfwSwapBuffers(window);
+        glfwPollEvents();
+        
+        return true;
+    }
+
+#endif
 
 
 
 bool SVRenderSimple::shouldClose() const {
     return window && glfwWindowShouldClose(window);
 }
+

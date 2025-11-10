@@ -1,22 +1,18 @@
-%YAML:1.0
----
-FocalLength: 369.50417228136058
-Intrisic: !!opencv-matrix
-   rows: 3
-   cols: 3
-   dt: f
-   data: [ 369.504181, 0., 640., 0., 369.504181, 400., 0., 0., 1. ]
-Rotation: !!opencv-matrix
-   rows: 3
-   cols: 3
-   dt: f
-   data: [ -1., -1.15079154e-16, 4.18853888e-17, 1.22464685e-16,
-       -0.939692616, 0.342020154, 0., 0.342020154, 0.939692616 ]
-Translation: !!opencv-matrix
-   rows: 3
-   cols: 1
-   dt: d
-   data: [ 0., 0., 0. ]
-CameraName: Rear
-CameraIP: "192.168.45.12"
-CameraPort: 5022
+FocalLength: 682.4381903165248
+Intrisic:
+  rows: 3
+  cols: 3
+  dt: f
+  data: [672.68035, 0.0, 657.28146, 0.0, 692.19603, 433.87921, 0.0, 0.0, 1.0]
+Rotation:
+  rows: 3
+  cols: 3
+  dt: f
+  data: [0.996892, 0.058788, -0.052450, 0.038348, 0.219480, 0.974863, 0.068822, -0.973844, 0.216544]
+Translation:
+  rows: 3
+  cols: 1
+  dt: d
+  data: [-729.879, 597.802, 1440.471]
+  
+  #(Rear - 5022)

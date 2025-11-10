@@ -1,22 +1,18 @@
-%YAML:1.0
----
-FocalLength: 369.50417228136058
-Intrisic: !!opencv-matrix
-   rows: 3
-   cols: 3
-   dt: f
-   data: [ 369.504181, 0., 640., 0., 369.504181, 400., 0., 0., 1. ]
-Rotation: !!opencv-matrix
-   rows: 3
-   cols: 3
-   dt: f
-   data: [ 6.12323426e-17, -0.939692616, 0.342020154, 1., 5.75395768e-17,
-       -2.09426944e-17, 0., 0.342020154, 0.939692616 ]
-Translation: !!opencv-matrix
-   rows: 3
-   cols: 1
-   dt: d
-   data: [ 0., 0., 0. ]
-CameraName: Left
-CameraIP: "192.168.45.11"
-CameraPort: 5021
+FocalLength: 530.376848072269
+Intrisic:
+  rows: 3
+  cols: 3
+  dt: f
+  data: [529.42272, 0.0, 624.65132, 0.0, 531.33098, 365.65057, 0.0, 0.0, 1.0]
+Rotation:
+  rows: 3
+  cols: 3
+  dt: f
+  data: [0.996027, -0.049834, 0.073797, -0.054740, 0.310999, 0.948833, -0.070235, -0.949103, 0.307035]
+Translation:
+  rows: 3
+  cols: 1
+  dt: d
+  data: [110.312, 1005.105, 12.585]
+  
+  #(Left - 5021)
