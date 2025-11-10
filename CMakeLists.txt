@@ -135,12 +135,14 @@ set(SOURCES
     src/SVStitcherSimple.cpp
     src/SVRenderSimple.cpp
     src/SVEthernetCamera.cpp
+    src/SVStitcherSimple.cpp 
     src/SVBlender.cpp
     src/SVGainCompensator.cpp
     src/Bowl.cpp
     src/OGLShader.cpp
     src/Model.cpp
     src/Mesh.cpp
+    src/kernelblend.cu
 )
 
 # CUDA kernel sources
