@@ -267,6 +267,8 @@ void SVRenderSimple::createTextureShader() {
     glDeleteShader(fragment);
 }
 
+// REPLACE the entire uploadTexture function with this memory-efficient version
+
 void SVRenderSimple::uploadTexture(const cv::cuda::GpuMat& frame, unsigned int texture_id) {
     if (frame.empty()) return;
     
@@ -278,126 +280,135 @@ void SVRenderSimple::uploadTexture(const cv::cuda::GpuMat& frame, unsigned int t
             break;
         }
     }
+    
     // ============================================================
-    // FLIP PROCESSING
+    // FLIP PROCESSING - Use static buffers to prevent memory leaks
     // ============================================================
-    cv::cuda::GpuMat processed_frame;
+    
+    // Static output buffers (one per camera, reused every frame)
+    static cv::cuda::GpuMat processed_frames[4];
+    cv::cuda::GpuMat& processed_frame = processed_frames[pbo_idx];
     
     if (pbo_idx == 0) {
-        // Front camera: Flip horizontally
-        // Create flip maps (only once, cache them as static)
+        // Front camera: Vertical flip
         static cv::cuda::GpuMat map_x, map_y;
-        static cv::Size last_size(0, 0);
-
-        if (map_x.empty()) {
+        static bool initialized = false;
+        
+        if (!initialized) {
             cv::Mat cpu_map_x(frame.rows, frame.cols, CV_32F);
             cv::Mat cpu_map_y(frame.rows, frame.cols, CV_32F);
             
             for (int y = 0; y < frame.rows; y++) {
-            for (int x = 0; x < frame.cols; x++) {
-                cpu_map_x.at<float>(y, x) = x;                    // Keep X same
-                cpu_map_y.at<float>(y, x) = frame.rows - 1 - y;  // Flip Y
+                for (int x = 0; x < frame.cols; x++) {
+                    cpu_map_x.at<float>(y, x) = x;
+                    cpu_map_y.at<float>(y, x) = frame.rows - 1 - y;
                 }
             }
             
             map_x.upload(cpu_map_x);
             map_y.upload(cpu_map_y);
-            last_size = frame.size();
+            initialized = true;
         }
         cv::cuda::remap(frame, processed_frame, map_x, map_y, cv::INTER_LINEAR);
         
     } else if (pbo_idx == 1) {
-        // Left camera: Rotate 90° ccounter -clockwise
+        // Left camera: 90° CCW + vertical flip (transpose)
         static cv::cuda::GpuMat map_x, map_y;
-        static cv::Size last_size(0, 0);
-        if (map_x.empty()) {
-            // Output size will be swapped (width <-> height)
-            cv::Mat cpu_map_x(frame.cols, frame.rows, CV_32F);  // Note: swapped!
+        static bool initialized = false;
+        
+        if (!initialized) {
+            cv::Mat cpu_map_x(frame.cols, frame.rows, CV_32F);
             cv::Mat cpu_map_y(frame.cols, frame.rows, CV_32F);
             
             for (int y = 0; y < frame.cols; y++) {
                 for (int x = 0; x < frame.rows; x++) {
-                    cpu_map_x.at<float>(y, x) =  y;  // New X = flipped old Y
-                    cpu_map_y.at<float>(y, x) =  x;   // New Y = old X
-                }
-            }
-
-            
-            map_x.upload(cpu_map_x);
-            map_y.upload(cpu_map_y);
-            last_size = frame.size();
-        }
-        cv::cuda::remap(frame, processed_frame, map_x, map_y, cv::INTER_LINEAR);
-        
-    } 
-    
-    else if (pbo_idx == 3) {
-        // Right camera: Rotate 90° clockwise + vertical flip
-        static cv::cuda::GpuMat map_x, map_y;
-        static cv::Size last_size(0, 0);
-        
-        if (map_x.empty() || last_size != frame.size()) {
-            // Output size will be swapped (width <-> height)
-            cv::Mat cpu_map_x(frame.cols, frame.rows, CV_32F);  // Note: swapped!
-            cv::Mat cpu_map_y(frame.cols, frame.rows, CV_32F);
-            
-            for (int y = 0; y < frame.cols; y++) {
-                for (int x = 0; x < frame.rows; x++) {
-                    // 90° CW + vertical flip
-                    cpu_map_x.at<float>(y, x) = frame.cols - 1 - y;  // Flipped old Y
-                    cpu_map_y.at<float>(y, x) = frame.rows - 1 - x;  // Flipped old X
+                    cpu_map_x.at<float>(y, x) = y;
+                    cpu_map_y.at<float>(y, x) = x;
                 }
             }
             
             map_x.upload(cpu_map_x);
             map_y.upload(cpu_map_y);
-            last_size = frame.size();
+            initialized = true;
+        }
+        cv::cuda::remap(frame, processed_frame, map_x, map_y, cv::INTER_LINEAR);
+        
+    } else if (pbo_idx == 2) {
+        // Rear camera: Horizontal flip
+        static cv::cuda::GpuMat map_x, map_y;
+        static bool initialized = false;
+        
+        if (!initialized) {
+            cv::Mat cpu_map_x(frame.rows, frame.cols, CV_32F);
+            cv::Mat cpu_map_y(frame.rows, frame.cols, CV_32F);
+            
+            for (int y = 0; y < frame.rows; y++) {
+                for (int x = 0; x < frame.cols; x++) {
+                    cpu_map_x.at<float>(y, x) = frame.cols - 1 - x;
+                    cpu_map_y.at<float>(y, x) = y;
+                }
+            }
+            
+            map_x.upload(cpu_map_x);
+            map_y.upload(cpu_map_y);
+            initialized = true;
+        }
+        cv::cuda::remap(frame, processed_frame, map_x, map_y, cv::INTER_LINEAR);
+        
+    } else if (pbo_idx == 3) {
+        // Right camera: 90° CW + vertical flip
+        static cv::cuda::GpuMat map_x, map_y;
+        static bool initialized = false;
+        
+        if (!initialized) {
+            cv::Mat cpu_map_x(frame.cols, frame.rows, CV_32F);
+            cv::Mat cpu_map_y(frame.cols, frame.rows, CV_32F);
+            
+            for (int y = 0; y < frame.cols; y++) {
+                for (int x = 0; x < frame.rows; x++) {
+                    cpu_map_x.at<float>(y, x) = frame.cols - 1 - y;
+                    cpu_map_y.at<float>(y, x) = frame.rows - 1 - x;
+                }
+            }
+            
+            map_x.upload(cpu_map_x);
+            map_y.upload(cpu_map_y);
+            initialized = true;
         }
         cv::cuda::remap(frame, processed_frame, map_x, map_y, cv::INTER_LINEAR);
     }
-    else if (pbo_idx == 2) {
-    // Rear camera: Flip horizontally
-    static cv::cuda::GpuMat map_x, map_y;
-    static cv::Size last_size(0, 0);
     
-    if (map_x.empty() || last_size != frame.size()) {
-        cv::Mat cpu_map_x(frame.rows, frame.cols, CV_32F);
-        cv::Mat cpu_map_y(frame.rows, frame.cols, CV_32F);
-        
-        for (int y = 0; y < frame.rows; y++) {
-            for (int x = 0; x < frame.cols; x++) {
-                cpu_map_x.at<float>(y, x) = frame.cols - 1 - x;  // Flip X
-                cpu_map_y.at<float>(y, x) = y;                    // Keep Y
-            }
-        }
-        
-        map_x.upload(cpu_map_x);
-        map_y.upload(cpu_map_y);
-        last_size = frame.size();
+    // Verify the processed frame is valid
+    if (processed_frame.empty()) {
+        std::cerr << "ERROR: processed_frame is empty for camera " << pbo_idx << std::endl;
+        return;
     }
-    cv::cuda::remap(frame, processed_frame, map_x, map_y, cv::INTER_LINEAR);
-    }
-    else {
-        // Rear camera (index 2): no transformation
-        processed_frame = frame;
-    }
-    // ============================================================
+    
+    // Calculate required buffer size
+    size_t required_size = processed_frame.cols * processed_frame.rows * 3;
     
     // Download from GPU to PBO
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, camera_pbos[pbo_idx]);
-    void* ptr = glMapBufferRange(GL_PIXEL_UNPACK_BUFFER, 0, 
-                                  processed_frame.cols * processed_frame.rows * 3,  // ✅ FIXED
+    
+    // Reallocate PBO if needed
+    GLint current_size = 0;
+    glGetBufferParameteriv(GL_PIXEL_UNPACK_BUFFER, GL_BUFFER_SIZE, &current_size);
+    if (current_size < required_size) {
+        glBufferData(GL_PIXEL_UNPACK_BUFFER, required_size, nullptr, GL_STREAM_DRAW);
+    }
+    
+    void* ptr = glMapBufferRange(GL_PIXEL_UNPACK_BUFFER, 0, required_size,
                                   GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT);
     
     if (ptr) {
-        cv::Mat cpu_frame(processed_frame.rows, processed_frame.cols, CV_8UC3, ptr);  // ✅ FIXED
-        processed_frame.download(cpu_frame);  // ✅ FIXED
+        cv::Mat cpu_frame(processed_frame.rows, processed_frame.cols, CV_8UC3, ptr);
+        processed_frame.download(cpu_frame);
         glUnmapBuffer(GL_PIXEL_UNPACK_BUFFER);
     }
     
     // Upload to texture
     glBindTexture(GL_TEXTURE_2D, texture_id);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, processed_frame.cols, processed_frame.rows,  // ✅ FIXED
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, processed_frame.cols, processed_frame.rows,
                  0, GL_BGR, GL_UNSIGNED_BYTE, 0);
     
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
@@ -671,8 +682,10 @@ bool SVRenderSimple::render(const std::array<cv::cuda::GpuMat, 4>& camera_frames
     // STEP 1: Draw 3D CAR FIRST (in center)
     // ============================================================
     if (car_model && car_shader) {
-        std::cout << "Drawing car..." << std::endl;  // This will print every frame
-        
+        // std::cout << "Drawing car..." << std::endl;  // This will print every frame
+        // CRITICAL: Unbind any textures from camera rendering
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, 0);  // Unbind texture
         // Set viewport for center
         glViewport(side_width, row_height, center_width, row_height);
         
@@ -700,15 +713,18 @@ bool SVRenderSimple::render(const std::array<cv::cuda::GpuMat, 4>& camera_frames
         car_shader->setMat4("model", car_transform);
         car_shader->setMat4("view", view);
         car_shader->setMat4("projection", projection);
-        car_shader->setVec3("lightPos", glm::vec3(5.0f, 10.0f, 5.0f));
+        // CHANGE THESE LIGHTING VALUES:
+        car_shader->setVec3("lightPos", glm::vec3(0.0f, 50.0f, 0.0f));     // Light directly above
         car_shader->setVec3("viewPos", camera.position);
-        car_shader->setVec3("lightColor", glm::vec3(1.0f, 1.0f, 1.0f));
-        car_shader->setVec3("objectColor", glm::vec3(0.8f, 0.2f, 0.2f));  // Red car
+        car_shader->setVec3("lightColor", glm::vec3(10.0f, 10.0f, 10.0f)); // MUCH brighter light
+        //car_shader->setVec3("objectColor", glm::vec3(1.0f, 0.0f, 0.0f));   // Bright red
+        car_shader->setVec3("colorTint", glm::vec3(2.0f, 0.5f, 0.5f));  // Red tint
+
         
         Shader& shader_ref = *reinterpret_cast<Shader*>(car_shader.get());
         car_model->Draw(shader_ref);
         
-        std::cout << "Car drawn!" << std::endl;
+        //std::cout << "Car drawn!" << std::endl;
     } else {
         std::cout << "Car NOT drawn - model=" << (car_model ? "OK" : "NULL") 
                   << " shader=" << (car_shader ? "OK" : "NULL") << std::endl;
