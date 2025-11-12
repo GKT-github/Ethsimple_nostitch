@@ -6,7 +6,15 @@
 #include <memory>
 #include <array>
 #include <string>
-
+#define WARPING
+// #define WARPING_CUSTOM
+// #define WARPING_SPERICAL
+#define WARPING_IPM
+#ifdef WARPING
+    #include <opencv2/cudawarping.hpp>
+    #include <opencv2/stitching/detail/warpers.hpp>
+    #include <vector>
+#endif
 #define NUM_CAMERAS 4
 
 /**
@@ -42,6 +50,20 @@ private:
     // Camera source
     std::shared_ptr<MultiCameraSource> camera_source;
     std::array<Frame, NUM_CAMERAS> frames;
+
+    #ifdef WARPING
+
+        std::vector<cv::cuda::GpuMat> warp_x_maps;
+        std::vector<cv::cuda::GpuMat> warp_y_maps;
+        std::vector<cv::Mat> K_matrices;
+        std::vector<cv::Mat> R_matrices;
+        float focal_length;
+        float scale_factor;
+        bool loadCalibration(const std::string& folder);
+        bool setupWarpMaps();
+    #endif
+
+
     
     // Rendering (no stitching!)
     std::shared_ptr<SVRenderSimple> renderer;

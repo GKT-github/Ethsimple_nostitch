@@ -413,61 +413,91 @@ void SVRenderSimple::uploadTexture(const cv::cuda::GpuMat& frame, unsigned int t
     
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
 }
+#ifdef RENDER_PRESERVE_AS
 
-// void SVRenderSimple::drawCameraView(unsigned int texture_id, int x, int y, int w, int h) {
-//     // Set viewport for this camera
-//     glViewport(x, y, w, h);
-    
-//     // Calculate NDC transform
-//     float screen_x = (float)x / screen_width;
-//     float screen_y = (float)y / screen_height;
-//     float screen_w = (float)w / screen_width;
-//     float screen_h = (float)h / screen_height;
-    
-//     // Create transform matrix (NDC space)
-//     glm::mat4 transform = glm::mat4(1.0f);
-//     transform = glm::translate(transform, glm::vec3(-1.0f + screen_w, -1.0f + screen_h, 0.0f));
-//     transform = glm::scale(transform, glm::vec3(screen_w, screen_h, 1.0f));
-    
-//     // Use texture shader
-//     texture_shader->use();
-//     texture_shader->setMat4("transform", transform);
-    
-//     // Bind texture
-//     glActiveTexture(GL_TEXTURE0);
-//     glBindTexture(GL_TEXTURE_2D, texture_id);
-//     texture_shader->setInt("texture1", 0);
-    
-//     // Draw quad
-//     glBindVertexArray(quad_VAO);
-//     glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
-//     glBindVertexArray(0);
-// }
-void SVRenderSimple::drawCameraView(unsigned int texture_id, int x, int y, int w, int h) {
-    // Set viewport for this camera
-    glViewport(x, y, w, h);
-    
-    // ============================================================
-    // STRETCH TO FILL - No aspect ratio preservation
-    // ============================================================
-    glm::mat4 transform = glm::mat4(1.0f);  // Identity matrix
-    // Quad vertices already cover -1 to +1 NDC space
-    // This stretches texture to completely fill viewport
-    
-    // Use texture shader
-    texture_shader->use();
-    texture_shader->setMat4("transform", transform);
-    
-    // Bind texture
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, texture_id);
-    texture_shader->setInt("texture1", 0);
-    
-    // Draw quad
-    glBindVertexArray(quad_VAO);
-    glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
-    glBindVertexArray(0);
-}
+    // Helper function to draw with aspect preservation
+    void SVRenderSimple::drawCameraViewWithAspect(
+        GLuint texture, 
+        int region_x, int region_y, 
+        int region_w, int region_h,
+        float texture_aspect) 
+    {
+        float region_aspect = (float)region_w / region_h;
+        
+        int draw_w, draw_h, offset_x = 0, offset_y = 0;
+        
+        if (texture_aspect > region_aspect) {
+            // Fit width, add letterbox
+            draw_w = region_w;
+            draw_h = (int)(region_w / texture_aspect);
+            offset_y = (region_h - draw_h) / 2;
+        } else {
+            // Fit height, add pillarbox
+            draw_h = region_h;
+            draw_w = (int)(region_h * texture_aspect);
+            offset_x = (region_w - draw_w) / 2;
+        }
+        
+        // Now draw at correct position with correct size
+        int final_x = region_x + offset_x;
+        int final_y = region_y + offset_y;
+        
+        // Convert Y coordinate from top-left origin to OpenGL bottom-left origin
+        int gl_final_y = screen_height - final_y - draw_h;
+        
+        // Set viewport for this region (this sizes the quad rendering)
+        glViewport(final_x, gl_final_y, draw_w, draw_h);
+        
+        // Simple identity transform - viewport will handle the size
+        glm::mat4 transform = glm::mat4(1.0f);
+        
+        // Use texture shader
+        texture_shader->use();
+        texture_shader->setMat4("transform", transform);
+        
+        // Bind texture
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, texture);
+        texture_shader->setInt("texture1", 0);
+        
+        // Draw quad
+        glBindVertexArray(quad_VAO);
+        glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+        glBindVertexArray(0);
+    }
+
+
+
+#endif
+
+#ifdef RENDER_NOPRESERVE_AS
+    void SVRenderSimple::drawCameraView(unsigned int texture_id, int x, int y, int w, int h) {
+        // Set viewport for this camera
+        glViewport(x, y, w, h);
+        
+        // ============================================================
+        // STRETCH TO FILL - No aspect ratio preservation
+        // ============================================================
+        glm::mat4 transform = glm::mat4(1.0f);  // Identity matrix
+        // Quad vertices already cover -1 to +1 NDC space
+        // This stretches texture to completely fill viewport
+        
+        // Use texture shader
+        texture_shader->use();
+        texture_shader->setMat4("transform", transform);
+        
+        // Bind texture
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, texture_id);
+        texture_shader->setInt("texture1", 0);
+        
+        // Draw quad
+        glBindVertexArray(quad_VAO);
+        glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+        glBindVertexArray(0);
+    }
+#endif
+
 
 // bool SVRenderSimple::render(const std::array<cv::cuda::GpuMat, 4>& camera_frames) {
 //     if (!is_init) return false;
@@ -650,110 +680,179 @@ bool SVRenderSimple::render(const std::array<cv::cuda::GpuMat, 4>& camera_frames
     glClearColor(0.05f, 0.05f, 0.05f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     
-    // Layout calculations
-    int side_width = screen_width * 0.30;    // 576
-    int center_width = screen_width * 0.40;  // 768
-    int row_height = screen_height / 3;      // 360
+    float camera_aspect = 1280.0f / 800.0f;  // 16:10 = 1.6
     
-    // Debug output once
-    static bool debug_once = false;
-    if (!debug_once) {
-        std::cout << "\n=== RENDER LAYOUT DEBUG ===" << std::endl;
-        std::cout << "Screen: " << screen_width << "x" << screen_height << std::endl;
-        std::cout << "Side width: " << side_width << ", Center width: " << center_width 
-                  << ", Row height: " << row_height << std::endl;
-        std::cout << "Front cam: (" << side_width << ", " << (screen_height * 2 / 3) 
-                  << ") size " << center_width << "x" << row_height << std::endl;
-        std::cout << "Left cam: (0, " << row_height << ") size " 
-                  << side_width << "x" << row_height << std::endl;
-        std::cout << "Rear cam: (" << side_width << ", 0) size " 
-                  << center_width << "x" << row_height << std::endl;
-        std::cout << "Right cam: (" << (side_width + center_width) << ", " << row_height 
-                  << ") size " << side_width << "x" << row_height << std::endl;
-        std::cout << "CAR viewport: (" << side_width << ", " << row_height 
-                  << ") size " << center_width << "x" << row_height << std::endl;
-        std::cout << "Car model ptr: " << (car_model ? "VALID" : "NULL") << std::endl;
-        std::cout << "Car shader ptr: " << (car_shader ? "VALID" : "NULL") << std::endl;
-        std::cout << "========================\n" << std::endl;
-        debug_once = true;
-    }
-    
-    // ============================================================
-    // STEP 1: Draw 3D CAR FIRST (in center)
-    // ============================================================
-    if (car_model && car_shader) {
-        // std::cout << "Drawing car..." << std::endl;  // This will print every frame
-        // CRITICAL: Unbind any textures from camera rendering
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, 0);  // Unbind texture
-        // Set viewport for center
-        glViewport(side_width, row_height, center_width, row_height);
+    #ifdef RENDER_PRESERVE_AS
+        // ============================================================
+        // LAYOUT WITH ASPECT PRESERVATION:
+        // [LEFT  ]  [TOP]    [RIGHT]
+        // [       ]  [CAR]    [      ]
+        // [       ]  [BOTTOM] [      ]
+        // ============================================================
         
-        // Clear only this viewport
-        glEnable(GL_SCISSOR_TEST);
-        glScissor(side_width, row_height, center_width, row_height);
-        glClearColor(0.2f, 0.2f, 0.3f, 1.0f);  // Blue-ish background to see it clearly
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        glDisable(GL_SCISSOR_TEST);
+        // Make cameras BIGGER - minimize black regions
+        int left_width = screen_width * 0.35;       // 35% for left camera
+        int right_width = screen_width * 0.35;      // 35% for right camera
+        int center_width = screen_width * 0.30;     // 30% for center (top/bottom cameras + car)
         
-        // Enable 3D rendering
-        glEnable(GL_DEPTH_TEST);
-        glDepthFunc(GL_LESS);
+        int top_height = screen_height * 0.35;      // 35% for top camera
+        int bottom_height = screen_height * 0.35;   // 35% for bottom camera
+        int center_height = screen_height * 0.30;   // 30% for center (car region)
         
-        // Setup camera and projection
-        glm::mat4 view = camera.getView();
-        glm::mat4 projection = glm::perspective(
-            glm::radians(camera.zoom), 
-            (float)center_width / row_height, 
-            0.1f, 100.0f
-        );
+        // Small car viewport
+        int car_viewport_w = 150;  // Smaller car viewport
+        int car_viewport_h = 150;  // Smaller car viewport
+        int car_viewport_x = left_width + (center_width - car_viewport_w) / 2;  // Centered in center region
+        int car_viewport_y = (screen_height - car_viewport_h) / 2;  // Centered vertically
         
-        // Render car
-        car_shader->use();
-        car_shader->setMat4("model", car_transform);
-        car_shader->setMat4("view", view);
-        car_shader->setMat4("projection", projection);
-        // CHANGE THESE LIGHTING VALUES:
-        car_shader->setVec3("lightPos", glm::vec3(0.0f, 50.0f, 0.0f));     // Light directly above
-        car_shader->setVec3("viewPos", camera.position);
-        car_shader->setVec3("lightColor", glm::vec3(10.0f, 10.0f, 10.0f)); // MUCH brighter light
-        //car_shader->setVec3("objectColor", glm::vec3(1.0f, 0.0f, 0.0f));   // Bright red
-        car_shader->setVec3("colorTint", glm::vec3(2.0f, 0.5f, 0.5f));  // Red tint
+        // Debug output once
+        static bool debug_once = false;
+        if (!debug_once) {
+            std::cout << "\n=== RENDER_PRESERVE_AS LAYOUT ===" << std::endl;
+            std::cout << "Screen: " << screen_width << "x" << screen_height << std::endl;
+            std::cout << "Left width: " << left_width << ", Center width: " << center_width << ", Right width: " << right_width << std::endl;
+            std::cout << "Top height: " << top_height << ", Center height: " << center_height << ", Bottom height: " << bottom_height << std::endl;
+            std::cout << "Top cam region: (" << left_width << ", " << 0 << ") " << center_width << "x" << top_height << std::endl;
+            std::cout << "Left cam region: (0, 0) " << left_width << "x" << screen_height << std::endl;
+            std::cout << "Right cam region: (" << (screen_width - right_width) << ", 0) " << right_width << "x" << screen_height << std::endl;
+            std::cout << "Bottom cam region: (" << left_width << ", " << (screen_height - bottom_height) << ") " << center_width << "x" << bottom_height << std::endl;
+            std::cout << "Car viewport: (" << car_viewport_x << ", " << car_viewport_y << ") " << car_viewport_w << "x" << car_viewport_h << std::endl;
+            std::cout << "================================\n" << std::endl;
+            debug_once = true;
+        }
+        
+        // Draw cameras FIRST (before car)
+        glDisable(GL_DEPTH_TEST);
+        
+        // Front camera (top center) - at the TOP
+        drawCameraViewWithAspect(camera_textures[0], 
+                                left_width, 0, 
+                                center_width, top_height, camera_aspect);
+        
+        // Left camera (full height on left)
+        drawCameraViewWithAspect(camera_textures[1], 
+                                0, 0, 
+                                left_width, screen_height, camera_aspect);
+        
+        // Right camera (full height on right)
+        drawCameraViewWithAspect(camera_textures[3], 
+                                screen_width - right_width, 0, 
+                                right_width, screen_height, camera_aspect);
+        
+        // Rear camera (bottom center) - at the BOTTOM
+        drawCameraViewWithAspect(camera_textures[2], 
+                                left_width, screen_height - bottom_height, 
+                                center_width, bottom_height, camera_aspect);
+        
+        // Now draw 3D car in the center (small viewport)
+        if (car_model && car_shader) {
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, 0);  // Unbind texture
+            
+            // Set viewport for small car region
+            glViewport(car_viewport_x, car_viewport_y, car_viewport_w, car_viewport_h);
+            
+            // Clear only this viewport
+            glEnable(GL_SCISSOR_TEST);
+            glScissor(car_viewport_x, car_viewport_y, car_viewport_w, car_viewport_h);
+            glClearColor(0.2f, 0.2f, 0.3f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            glDisable(GL_SCISSOR_TEST);
+            
+            // Enable 3D rendering
+            glEnable(GL_DEPTH_TEST);
+            glDepthFunc(GL_LESS);
+            
+            // Setup camera and projection
+            glm::mat4 view = camera.getView();
+            glm::mat4 projection = glm::perspective(
+                glm::radians(camera.zoom), 
+                (float)car_viewport_w / car_viewport_h, 
+                0.1f, 100.0f
+            );
+            
+            // Render car
+            car_shader->use();
+            car_shader->setMat4("model", car_transform);
+            car_shader->setMat4("view", view);
+            car_shader->setMat4("projection", projection);
+            car_shader->setVec3("lightPos", glm::vec3(0.0f, 50.0f, 0.0f));
+            car_shader->setVec3("viewPos", camera.position);
+            car_shader->setVec3("lightColor", glm::vec3(10.0f, 10.0f, 10.0f));
+            car_shader->setVec3("colorTint", glm::vec3(2.0f, 0.5f, 0.5f));
+            
+            Shader& shader_ref = *reinterpret_cast<Shader*>(car_shader.get());
+            car_model->Draw(shader_ref);
+        }
+    #endif
 
+    #ifdef RENDER_NOPRESERVE_AS
+        // ============================================================
+        // LAYOUT WITHOUT ASPECT PRESERVATION (STRETCH):
+        // Old layout - cameras stretch to fill their regions
+        // ============================================================
         
-        Shader& shader_ref = *reinterpret_cast<Shader*>(car_shader.get());
-        car_model->Draw(shader_ref);
+        int side_width = screen_width * 0.30;
+        int center_width = screen_width * 0.40;
+        int row_height = screen_height / 3;
         
-        //std::cout << "Car drawn!" << std::endl;
-    } else {
-        std::cout << "Car NOT drawn - model=" << (car_model ? "OK" : "NULL") 
-                  << " shader=" << (car_shader ? "OK" : "NULL") << std::endl;
-    }
-    
-    // ============================================================
-    // STEP 2: Draw cameras AROUND the car
-    // ============================================================
-    glDisable(GL_DEPTH_TEST);  // Cameras are 2D overlays
-    
-    // Front camera (top center)
-    drawCameraView(camera_textures[0], 
-                   side_width, screen_height * 2 / 3,
-                   center_width, row_height);
-    
-    // Left camera (middle left)
-    drawCameraView(camera_textures[1], 
-                   0, row_height,
-                   side_width, row_height);
-    
-    // Rear camera (bottom center)
-    drawCameraView(camera_textures[2], 
-                   side_width, 0,
-                   center_width, row_height);
-    
-    // Right camera (middle right)
-    drawCameraView(camera_textures[3], 
-                   side_width + center_width, row_height,
-                   side_width, row_height);
+        // Draw 3D car first
+        if (car_model && car_shader) {
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, 0);
+            glViewport(side_width, row_height, center_width, row_height);
+            
+            glEnable(GL_SCISSOR_TEST);
+            glScissor(side_width, row_height, center_width, row_height);
+            glClearColor(0.2f, 0.2f, 0.3f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            glDisable(GL_SCISSOR_TEST);
+            
+            glEnable(GL_DEPTH_TEST);
+            glDepthFunc(GL_LESS);
+            
+            glm::mat4 view = camera.getView();
+            glm::mat4 projection = glm::perspective(
+                glm::radians(camera.zoom), 
+                (float)center_width / row_height, 
+                0.1f, 100.0f
+            );
+            
+            car_shader->use();
+            car_shader->setMat4("model", car_transform);
+            car_shader->setMat4("view", view);
+            car_shader->setMat4("projection", projection);
+            car_shader->setVec3("lightPos", glm::vec3(0.0f, 50.0f, 0.0f));
+            car_shader->setVec3("viewPos", camera.position);
+            car_shader->setVec3("lightColor", glm::vec3(10.0f, 10.0f, 10.0f));
+            car_shader->setVec3("colorTint", glm::vec3(2.0f, 0.5f, 0.5f));
+            
+            Shader& shader_ref = *reinterpret_cast<Shader*>(car_shader.get());
+            car_model->Draw(shader_ref);
+        }
+        
+        glDisable(GL_DEPTH_TEST);
+        
+        // Front camera (top center)
+        drawCameraView(camera_textures[0], 
+                    side_width, screen_height * 2 / 3,
+                    center_width, row_height);
+        
+        // Left camera (middle left)
+        drawCameraView(camera_textures[1], 
+                    0, row_height,
+                    side_width, row_height);
+        
+        // Rear camera (bottom center)
+        drawCameraView(camera_textures[2], 
+                    side_width, 0,
+                    center_width, row_height);
+        
+        // Right camera (middle right)
+        drawCameraView(camera_textures[3], 
+                    side_width + center_width, row_height,
+                    side_width, row_height);
+    #endif
     
     // Restore full viewport
     glViewport(0, 0, screen_width, screen_height);

@@ -1,22 +1,20 @@
 %YAML:1.0
 ---
-FocalLength: 369.50417228136058
+FocalLength: 487.8022217503898
 Intrisic: !!opencv-matrix
-   rows: 3
-   cols: 3
-   dt: f
-   data: [ 369.504181, 0., 640., 0., 369.504181, 400., 0., 0., 1. ]
+  rows: 3
+  cols: 3
+  dt: f
+  data: [487.58065, 0.0, 609.71179, 0.0, 488.02377, 398.88055, 0.0, 0.0, 1.0]
 Rotation: !!opencv-matrix
-   rows: 3
-   cols: 3
-   dt: f
-   data: [ 1., 0., 0., 0., 0.939692616, -0.342020154, 0., 0.342020154,
-       0.939692616 ]
+  rows: 3
+  cols: 3
+  dt: f
+  data: [0.991054, 0.096190, 0.092522, -0.122201, 0.375258, 0.918830, 0.053663, -0.921916, 0.383655]
 Translation: !!opencv-matrix
-   rows: 3
-   cols: 1
-   dt: d
-   data: [ 0., 0., 0. ]
-CameraName: Front
-CameraIP: "192.168.45.10"
-CameraPort: 5020
+  rows: 3
+  cols: 1
+  dt: d
+  data: [502.553, 769.389, 545.141]
+  
+   #(Front - 5020)

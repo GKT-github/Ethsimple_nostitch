@@ -132,12 +132,12 @@ include_directories(
 set(SOURCES
     src/main.cpp
     src/SVAppSimple.cpp
-    src/SVStitcherSimple.cpp
     src/SVRenderSimple.cpp
     src/SVEthernetCamera.cpp
-    src/SVBlender.cpp
-    src/SVGainCompensator.cpp
-    src/Bowl.cpp
+    # src/SVStitcherSimple.cpp
+    # src/SVBlender.cpp
+    # src/SVGainCompensator.cpp
+    # src/Bowl.cpp
     src/OGLShader.cpp
     src/Model.cpp
     src/Mesh.cpp

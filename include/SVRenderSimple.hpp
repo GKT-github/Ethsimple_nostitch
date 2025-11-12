@@ -8,6 +8,8 @@
 #include <memory>
 #include <string>
 #include <array>
+#define RENDER_PRESERVE_AS
+//#define RENDER_NOPRESERVE_AS
 
 // Forward declarations to avoid full includes
 class OGLShader;
@@ -76,7 +78,15 @@ private:
                        const std::string& frag_shader);
     void createTextureShader();
     void uploadTexture(const cv::cuda::GpuMat& frame, unsigned int texture_id);
+    #ifdef RENDER_NOPRESERVE_AS
     void drawCameraView(unsigned int texture_id, int x, int y, int w, int h);
+    #endif
+    #ifdef RENDER_PRESERVE_AS
+    void drawCameraViewWithAspect(GLuint texture, 
+                                   int region_x, int region_y, 
+                                   int region_w, int region_h,
+                                   float texture_aspect);
+    #endif
     
     // Window
     GLFWwindow* window;
