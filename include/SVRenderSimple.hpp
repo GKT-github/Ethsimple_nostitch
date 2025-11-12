@@ -8,7 +8,7 @@
 #include <memory>
 #include <string>
 #include <array>
-#define RENDER_PRESERVE_AS
+#define RENDER_PRESERVE_AS //Aspect Ratio Preservation
 //#define RENDER_NOPRESERVE_AS
 
 // Forward declarations to avoid full includes

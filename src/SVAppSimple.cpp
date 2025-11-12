@@ -6,7 +6,7 @@
 using namespace std::chrono_literals;
 
 SVAppSimple::SVAppSimple() : is_running(false) {
-    #ifdef WARPING
+    #if defined(WARPING) || defined(RENDER_PRESERVE_AS_CUSTOMHOMOGRAPHY)
         scale_factor = 0.65f;  // ADD THIS
     #endif
 }
@@ -107,6 +107,37 @@ bool SVAppSimple::init() {
         }
 
         std::cout << "  ✓ Bird's-eye transformation ready" << std::endl;
+    #endif
+
+    // ========================================
+    // CUSTOM HOMOGRAPHY WITH MANUAL CALIBRATION
+    // ========================================
+    #ifdef RENDER_PRESERVE_AS_CUSTOMHOMOGRAPHY
+        std::cout << "\n[3/4] Setting up custom homography with manual points..." << std::endl;
+        
+        // Try to load existing calibration points
+        if (!loadCalibrationPoints("../camparameters")) {
+            // If no saved points, perform manual calibration
+            std::cout << "  No saved calibration found. Starting manual calibration..." << std::endl;
+            
+            if (!selectManualCalibrationPoints(frames)) {
+                std::cerr << "ERROR: Failed to select calibration points" << std::endl;
+                return false;
+            }
+            
+            // Save the calibration points for future use
+            if (!saveCalibrationPoints("../camparameters")) {
+                std::cerr << "WARNING: Failed to save calibration points" << std::endl;
+            }
+        }
+        
+        // Build warp maps from the calibration points
+        if (!setupCustomHomographyMaps()) {
+            std::cerr << "ERROR: Failed to setup custom homography maps" << std::endl;
+            return false;
+        }
+        
+        std::cout << "  ✓ Custom homography ready" << std::endl;
     #endif
 
     // ========================================
@@ -344,85 +375,6 @@ void SVAppSimple::stop() {
         }
     #endif
 
-    #ifdef WARPING_CUSTOM
-        bool SVAppSimple::setupWarpMaps() {
-        warp_x_maps.resize(NUM_CAMERAS);
-        warp_y_maps.resize(NUM_CAMERAS);
-        
-        std::cout << "Creating bird's-eye warp maps..." << std::endl;
-        
-        cv::Size input_size(CAMERA_WIDTH, CAMERA_HEIGHT);
-        cv::Size scaled_input(input_size.width * scale_factor, 
-                            input_size.height * scale_factor);
-        
-        // Output size for bird's-eye view
-        cv::Size output_size = scaled_input;  // Keep same size as scaled input
-        
-        for (int i = 0; i < NUM_CAMERAS; i++) {
-            // ═══════════════════════════════════════════════════════════
-            // Define trapezoid region in input (perspective view)
-            // This is the ground area we want to see from above
-            // ═══════════════════════════════════════════════════════════
-            
-            std::vector<cv::Point2f> src_pts;
-            std::vector<cv::Point2f> dst_pts;
-            
-            // Adjust these based on camera orientation
-            float w = input_size.width;
-            float h = input_size.height;
-            
-            // Source points: trapezoid in perspective view (ground area)
-            // These define what part of the camera sees the ground
-            src_pts.push_back(cv::Point2f(w * 0.2f, h * 0.6f));  // Top-left
-            src_pts.push_back(cv::Point2f(w * 0.8f, h * 0.6f));  // Top-right
-            src_pts.push_back(cv::Point2f(w * 1.0f, h * 1.0f));  // Bottom-right
-            src_pts.push_back(cv::Point2f(0.0f, h * 1.0f));      // Bottom-left
-            
-            // Destination points: rectangle in bird's-eye view
-            dst_pts.push_back(cv::Point2f(0.0f, 0.0f));
-            dst_pts.push_back(cv::Point2f(output_size.width, 0.0f));
-            dst_pts.push_back(cv::Point2f(output_size.width, output_size.height));
-            dst_pts.push_back(cv::Point2f(0.0f, output_size.height));
-            
-            // Scale source points for processing scale
-            for (auto& pt : src_pts) {
-                pt.x *= scale_factor;
-                pt.y *= scale_factor;
-            }
-            
-            // Compute homography matrix
-            cv::Mat H = cv::getPerspectiveTransform(src_pts, dst_pts);
-            
-            // Build warp maps
-            cv::Mat xmap(output_size, CV_32F);
-            cv::Mat ymap(output_size, CV_32F);
-            
-            for (int y = 0; y < output_size.height; y++) {
-                for (int x = 0; x < output_size.width; x++) {
-                    // For each output pixel, find where it comes from in input
-                    cv::Mat pt_dst = (cv::Mat_<double>(3,1) << x, y, 1.0);
-                    cv::Mat pt_src = H.inv() * pt_dst;
-                    
-                    double w_coord = pt_src.at<double>(2);
-                    float src_x = pt_src.at<double>(0) / w_coord;
-                    float src_y = pt_src.at<double>(1) / w_coord;
-                    
-                    xmap.at<float>(y, x) = src_x;
-                    ymap.at<float>(y, x) = src_y;
-                }
-            }
-            
-            // Upload to GPU
-            warp_x_maps[i].upload(xmap);
-            warp_y_maps[i].upload(ymap);
-            
-            std::cout << "  ✓ Camera " << i << ": bird's-eye warp maps created" << std::endl;
-        }
-        
-        return true;
-        }
-    #endif
-
     #ifdef WARPING_IPM
         bool SVAppSimple::setupWarpMaps() {
         warp_x_maps.resize(NUM_CAMERAS);
@@ -478,4 +430,324 @@ void SVAppSimple::stop() {
         return true;
         }
     #endif
+#endif // end WARPING
+
+
+#ifdef RENDER_PRESERVE_AS_CUSTOMHOMOGRAPHY
+// ============================================================================
+// CUSTOM HOMOGRAPHY WITH MANUAL POINT SELECTION
+// ============================================================================
+
+bool SVAppSimple::setupCustomHomographyMaps() {
+    warp_x_maps.resize(NUM_CAMERAS);
+    warp_y_maps.resize(NUM_CAMERAS);
+    
+    std::cout << "Creating custom homography warp maps from manual points..." << std::endl;
+    
+    cv::Size input_size(CAMERA_WIDTH, CAMERA_HEIGHT);
+    cv::Size scaled_input(input_size.width * scale_factor, 
+                        input_size.height * scale_factor);
+    
+    // Output size for bird's-eye view
+    cv::Size output_size = scaled_input;  // Keep same size as scaled input
+    
+    for (int i = 0; i < NUM_CAMERAS; i++) {
+        // Get source and destination points for this camera
+        if (manual_src_points.empty() || manual_src_points[i].size() != 4 ||
+            manual_dst_points.empty() || manual_dst_points[i].size() != 4) {
+            std::cerr << "ERROR: Invalid calibration points for camera " << i << std::endl;
+            return false;
+        }
+        
+        std::vector<cv::Point2f> src_pts = manual_src_points[i];
+        std::vector<cv::Point2f> dst_pts = manual_dst_points[i];
+        
+        // Scale source points for processing scale
+        for (auto& pt : src_pts) {
+            pt.x *= scale_factor;
+            pt.y *= scale_factor;
+        }
+        
+        // Compute homography matrix H: maps destination -> source
+        // H transforms a point in the bird's-eye view back to the perspective view
+        cv::Mat H = cv::getPerspectiveTransform(dst_pts, src_pts);
+        
+        std::cout << "  Camera " << i << " homography matrix:" << std::endl;
+        std::cout << H << std::endl;
+        
+        // Build warp maps using the homography
+        cv::Mat xmap(output_size, CV_32F);
+        cv::Mat ymap(output_size, CV_32F);
+        
+        for (int y = 0; y < output_size.height; y++) {
+            for (int x = 0; x < output_size.width; x++) {
+                // For each output pixel in bird's-eye view, find where it comes from in input
+                cv::Mat pt_dst = (cv::Mat_<double>(3,1) << x, y, 1.0);
+                cv::Mat pt_src = H * pt_dst;  // Apply homography
+                
+                double w_coord = pt_src.at<double>(2);
+                if (w_coord > 1e-6) {
+                    float src_x = static_cast<float>(pt_src.at<double>(0) / w_coord);
+                    float src_y = static_cast<float>(pt_src.at<double>(1) / w_coord);
+                    
+                    xmap.at<float>(y, x) = src_x;
+                    ymap.at<float>(y, x) = src_y;
+                } else {
+                    // Invalid point (w = 0), mark as out of bounds
+                    xmap.at<float>(y, x) = -1.0f;
+                    ymap.at<float>(y, x) = -1.0f;
+                }
+            }
+        }
+        
+        // Upload to GPU
+        warp_x_maps[i].upload(xmap);
+        warp_y_maps[i].upload(ymap);
+        
+        std::cout << "  ✓ Camera " << i << ": custom homography warp maps created" << std::endl;
+    }
+    
+    return true;
+}
+
+    // ============================================================================
+    // INTERACTIVE CALIBRATION - Requires GTK support in OpenCV
+    // ============================================================================
+    #ifdef CUSTOM_HOMOGRAPHY_INTERACTIVE
+    bool SVAppSimple::selectManualCalibrationPoints(const std::array<Frame, NUM_CAMERAS>& sample_frames) {
+        std::cout << "\n========================================" << std::endl;
+        std::cout << "INTERACTIVE CALIBRATION: Select 4 Points per Camera" << std::endl;
+        std::cout << "========================================" << std::endl;
+        std::cout << "Instructions:" << std::endl;
+        std::cout << "  - Click on 4 points in each camera image (trapezoid shape)" << std::endl;
+        std::cout << "  - Order: Top-Left → Top-Right → Bottom-Right → Bottom-Left" << std::endl;
+        std::cout << "  - Points should outline the ground visible in the camera" << std::endl;
+        std::cout << "  - Press 'SPACE' to confirm 4 points and move to next camera" << std::endl;
+        std::cout << "  - Press 'R' to reset current camera" << std::endl;
+        std::cout << "========================================\n" << std::endl;
+        
+        manual_src_points.resize(NUM_CAMERAS);
+        manual_dst_points.resize(NUM_CAMERAS);
+        
+        // Create destination points (output bird's-eye view rectangle)
+        cv::Size scaled_input(CAMERA_WIDTH * scale_factor, CAMERA_HEIGHT * scale_factor);
+        manual_dst_points[0] = {
+            cv::Point2f(0.0f, 0.0f),
+            cv::Point2f(static_cast<float>(scaled_input.width), 0.0f),
+            cv::Point2f(static_cast<float>(scaled_input.width), static_cast<float>(scaled_input.height)),
+            cv::Point2f(0.0f, static_cast<float>(scaled_input.height))
+        };
+        // All cameras use same destination rectangle
+        for (int i = 1; i < NUM_CAMERAS; i++) {
+            manual_dst_points[i] = manual_dst_points[0];
+        }
+        
+        for (int cam = 0; cam < NUM_CAMERAS; cam++) {
+            std::cout << "Camera " << cam << ": Select 4 points..." << std::endl;
+            
+            // Download frame to CPU for display
+            cv::Mat cpu_frame;
+            sample_frames[cam].gpuFrame.download(cpu_frame);
+            
+            // Create window and display image
+            std::string window_name = "Camera " + std::to_string(cam) + " - Click 4 Points";
+            cv::namedWindow(window_name, cv::WINDOW_AUTOSIZE);
+            cv::imshow(window_name, cpu_frame);
+            
+            // Temporary storage for points during selection
+            std::vector<cv::Point2f> temp_points;
+            
+            // Set mouse callback - capture temp_points by reference
+            cv::setMouseCallback(window_name, [](int event, int x, int y, int flags, void* userdata) {
+                auto* pThis = static_cast<std::vector<cv::Point2f>*>(userdata);
+                if (event == cv::EVENT_LBUTTONDOWN) {
+                    pThis->push_back(cv::Point2f(static_cast<float>(x), static_cast<float>(y)));
+                    std::cout << "  Point " << pThis->size() << ": (" << x << ", " << y << ")" << std::endl;
+                }
+            }, &temp_points);
+            
+            // Wait for user to select 4 points
+            while (temp_points.size() < 4) {
+                int key = cv::waitKey(0);
+                
+                if (key == 'r' || key == 'R') {
+                    // Reset
+                    temp_points.clear();
+                    std::cout << "Points reset. Select 4 points again..." << std::endl;
+                } else if (key == ' ' && temp_points.size() == 4) {
+                    // Confirm
+                    break;
+                }
+            }
+            
+            if (temp_points.size() != 4) {
+                std::cerr << "ERROR: Did not get exactly 4 points for camera " << cam << std::endl;
+                cv::destroyWindow(window_name);
+                return false;
+            }
+            
+            // Store the selected points
+            manual_src_points[cam] = temp_points;
+            
+            std::cout << "  ✓ Camera " << cam << " calibration complete:" << std::endl;
+            for (int j = 0; j < 4; j++) {
+                std::cout << "    Point " << j << ": (" << manual_src_points[cam][j].x 
+                          << ", " << manual_src_points[cam][j].y << ")" << std::endl;
+            }
+            
+            cv::destroyWindow(window_name);
+        }
+        
+        std::cout << "\n✓ Interactive calibration complete!" << std::endl;
+        return true;
+    }
+    #endif
+
+    // ============================================================================
+    // NON-INTERACTIVE CALIBRATION - Uses Default Points (No GTK Required)
+    // ============================================================================
+    #ifdef CUSTOM_HOMOGRAPHY_NONINTERACTIVE
+    bool SVAppSimple::selectManualCalibrationPoints(const std::array<Frame, NUM_CAMERAS>& sample_frames) {
+        std::cout << "\n========================================" << std::endl;
+        std::cout << "NON-INTERACTIVE CALIBRATION: Using Default Points" << std::endl;
+        std::cout << "========================================" << std::endl;
+        std::cout << "Note: OpenCV compiled without GTK support or interactive mode disabled" << std::endl;
+        std::cout << "Using default calibration points instead" << std::endl;
+        std::cout << "To enable interactive calibration:" << std::endl;
+        std::cout << "  1. Install: sudo apt-get install libgtk2.0-dev pkg-config" << std::endl;
+        std::cout << "  2. Rebuild OpenCV with GTK support" << std::endl;
+        std::cout << "  3. Change header: #define CUSTOM_HOMOGRAPHY_INTERACTIVE" << std::endl;
+        std::cout << "========================================\n" << std::endl;
+        
+        manual_src_points.resize(NUM_CAMERAS);
+        manual_dst_points.resize(NUM_CAMERAS);
+        
+        // Create destination points (output bird's-eye view rectangle)
+        cv::Size scaled_input(CAMERA_WIDTH * scale_factor, CAMERA_HEIGHT * scale_factor);
+        manual_dst_points[0] = {
+            cv::Point2f(0.0f, 0.0f),
+            cv::Point2f(static_cast<float>(scaled_input.width), 0.0f),
+            cv::Point2f(static_cast<float>(scaled_input.width), static_cast<float>(scaled_input.height)),
+            cv::Point2f(0.0f, static_cast<float>(scaled_input.height))
+        };
+        // All cameras use same destination rectangle
+        for (int i = 1; i < NUM_CAMERAS; i++) {
+            manual_dst_points[i] = manual_dst_points[0];
+        }
+        
+        // Define default calibration points for each camera
+        // These are typical trapezoids that map ground plane to bird's-eye view
+        // ADJUST THESE VALUES BASED ON YOUR CAMERA SETUP
+        
+        // Camera 0: Front
+        manual_src_points[0] = {
+            cv::Point2f(256.0f, 360.0f),   // Top-left
+            cv::Point2f(1024.0f, 360.0f),  // Top-right
+            cv::Point2f(1280.0f, 800.0f),  // Bottom-right
+            cv::Point2f(0.0f, 800.0f)      // Bottom-left
+        };
+        
+        // Camera 1: Left (90° left view)
+        manual_src_points[1] = {
+            cv::Point2f(200.0f, 400.0f),   // Top-left
+            cv::Point2f(850.0f, 300.0f),   // Top-right
+            cv::Point2f(1280.0f, 800.0f),  // Bottom-right
+            cv::Point2f(0.0f, 800.0f)      // Bottom-left
+        };
+        
+        // Camera 2: Rear (opposite of front)
+        manual_src_points[2] = {
+            cv::Point2f(256.0f, 360.0f),   // Top-left
+            cv::Point2f(1024.0f, 360.0f),  // Top-right
+            cv::Point2f(1280.0f, 800.0f),  // Bottom-right
+            cv::Point2f(0.0f, 800.0f)      // Bottom-left
+        };
+        
+        // Camera 3: Right (90° right view)
+        manual_src_points[3] = {
+            cv::Point2f(430.0f, 300.0f),   // Top-left
+            cv::Point2f(1080.0f, 400.0f),  // Top-right
+            cv::Point2f(1280.0f, 800.0f),  // Bottom-right
+            cv::Point2f(0.0f, 800.0f)      // Bottom-left
+        };
+        
+        std::cout << "Using default calibration points:" << std::endl;
+        for (int cam = 0; cam < NUM_CAMERAS; cam++) {
+            std::cout << "  Camera " << cam << ":" << std::endl;
+            for (int j = 0; j < 4; j++) {
+                std::cout << "    Point " << j << ": (" << manual_src_points[cam][j].x 
+                          << ", " << manual_src_points[cam][j].y << ")" << std::endl;
+            }
+        }
+        
+        std::cout << "\n✓ Default calibration points loaded!" << std::endl;
+        std::cout << "To refine calibration:" << std::endl;
+        std::cout << "  1. Edit '../camparameters/custom_homography_points.yaml'" << std::endl;
+        std::cout << "  2. Or install GTK and use interactive calibration" << std::endl;
+        return true;
+    }
+    #endif
+
+    bool SVAppSimple::saveCalibrationPoints(const std::string& folder) {
+    std::cout << "Saving calibration points to YAML..." << std::endl;
+    
+    std::string filename = folder + "/custom_homography_points.yaml";
+    cv::FileStorage fs(filename, cv::FileStorage::WRITE);
+    
+    if (!fs.isOpened()) {
+        std::cerr << "ERROR: Failed to open file for writing: " << filename << std::endl;
+        return false;
+    }
+    
+    fs << "num_cameras" << NUM_CAMERAS;
+    fs << "scale_factor" << scale_factor;
+    
+    for (int i = 0; i < NUM_CAMERAS; i++) {
+        std::string src_key = "camera_" + std::to_string(i) + "_src_points";
+        std::string dst_key = "camera_" + std::to_string(i) + "_dst_points";
+        
+        fs << src_key << manual_src_points[i];
+        fs << dst_key << manual_dst_points[i];
+    }
+    
+    fs.release();
+    std::cout << "  ✓ Saved to: " << filename << std::endl;
+    return true;
+}
+
+bool SVAppSimple::loadCalibrationPoints(const std::string& folder) {
+    std::string filename = folder + "/custom_homography_points.yaml";
+    cv::FileStorage fs(filename, cv::FileStorage::READ);
+    
+    if (!fs.isOpened()) {
+        std::cout << "Note: Calibration file not found. Will need manual calibration." << std::endl;
+        return false;
+    }
+    
+    int saved_cameras = 0;
+    fs["num_cameras"] >> saved_cameras;
+    
+    if (saved_cameras != NUM_CAMERAS) {
+        std::cerr << "ERROR: Saved calibration has " << saved_cameras << " cameras, expected " 
+                    << NUM_CAMERAS << std::endl;
+        return false;
+    }
+    
+    manual_src_points.resize(NUM_CAMERAS);
+    manual_dst_points.resize(NUM_CAMERAS);
+    
+    for (int i = 0; i < NUM_CAMERAS; i++) {
+        std::string src_key = "camera_" + std::to_string(i) + "_src_points";
+        std::string dst_key = "camera_" + std::to_string(i) + "_dst_points";
+        
+        fs[src_key] >> manual_src_points[i];
+        fs[dst_key] >> manual_dst_points[i];
+    }
+    
+    fs.release();
+    std::cout << "  ✓ Loaded calibration points from: " << filename << std::endl;
+    return true;
+}
 #endif
+
+

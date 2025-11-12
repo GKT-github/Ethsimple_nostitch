@@ -6,11 +6,16 @@
 #include <memory>
 #include <array>
 #include <string>
-#define WARPING
+// #define WARPING
 // #define WARPING_CUSTOM
 // #define WARPING_SPERICAL
-#define WARPING_IPM
-#ifdef WARPING
+// #define WARPING_IPM
+#define RENDER_PRESERVE_AS_CUSTOMHOMOGRAPHY
+// #define CUSTOM_HOMOGRAPHY_INTERACTIVE  // Enable for interactive calibration (requires GTK)
+#define CUSTOM_HOMOGRAPHY_NONINTERACTIVE   // Enable for non-interactive mode (uses defaults)
+
+// Include necessary OpenCV headers for warping and custom homography
+#if defined(WARPING) || defined(RENDER_PRESERVE_AS_CUSTOMHOMOGRAPHY)
     #include <opencv2/cudawarping.hpp>
     #include <opencv2/stitching/detail/warpers.hpp>
     #include <vector>
@@ -52,15 +57,27 @@ private:
     std::array<Frame, NUM_CAMERAS> frames;
 
     #ifdef WARPING
-
-        std::vector<cv::cuda::GpuMat> warp_x_maps;
-        std::vector<cv::cuda::GpuMat> warp_y_maps;
         std::vector<cv::Mat> K_matrices;
         std::vector<cv::Mat> R_matrices;
         float focal_length;
-        float scale_factor;
         bool loadCalibration(const std::string& folder);
         bool setupWarpMaps();
+    #endif
+
+    #if defined(WARPING) || defined(RENDER_PRESERVE_AS_CUSTOMHOMOGRAPHY)
+        std::vector<cv::cuda::GpuMat> warp_x_maps;
+        std::vector<cv::cuda::GpuMat> warp_y_maps;
+        float scale_factor;
+    #endif
+
+    #ifdef RENDER_PRESERVE_AS_CUSTOMHOMOGRAPHY
+        // Manual calibration points for each camera (4 points per camera)
+        std::vector<std::vector<cv::Point2f>> manual_src_points;  // Source (perspective view)
+        std::vector<std::vector<cv::Point2f>> manual_dst_points;  // Destination (bird's-eye)
+        bool selectManualCalibrationPoints(const std::array<Frame, NUM_CAMERAS>& sample_frames);
+        bool saveCalibrationPoints(const std::string& folder);
+        bool loadCalibrationPoints(const std::string& folder);
+        bool setupCustomHomographyMaps();
     #endif
 
 
