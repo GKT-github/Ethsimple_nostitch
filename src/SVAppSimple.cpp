@@ -190,7 +190,7 @@ void SVAppSimple::run() {
     auto last_fps_time = start_time;
     
     std::cout << "Starting main loop..." << std::endl;
-    #ifdef WARPING
+    #if defined(WARPING) || defined(RENDER_PRESERVE_AS_CUSTOMHOMOGRAPHY)
         std::vector<cv::cuda::GpuMat> warped_frames(NUM_CAMERAS);
     #endif
     while (is_running && !renderer->shouldClose()) {
@@ -216,7 +216,7 @@ void SVAppSimple::run() {
         }
 
 
-        #ifdef WARPING
+        #if defined(WARPING) || defined(RENDER_PRESERVE_AS_CUSTOMHOMOGRAPHY)
             for (int i = 0; i < NUM_CAMERAS; i++) {
                 // 1. Resize to processing scale
                 cv::cuda::GpuMat scaled;
@@ -248,7 +248,7 @@ void SVAppSimple::run() {
                 break;
             }
         
-        #else
+    #else
                 
             // Prepare frame array for renderer (just pass GPU frames directly!)
             std::array<cv::cuda::GpuMat, 4> gpu_frames;

@@ -11,8 +11,8 @@
 // #define WARPING_SPERICAL
 // #define WARPING_IPM
 #define RENDER_PRESERVE_AS_CUSTOMHOMOGRAPHY
-// #define CUSTOM_HOMOGRAPHY_INTERACTIVE  // Enable for interactive calibration (requires GTK)
-#define CUSTOM_HOMOGRAPHY_NONINTERACTIVE   // Enable for non-interactive mode (uses defaults)
+#define CUSTOM_HOMOGRAPHY_INTERACTIVE  // Enable for interactive calibration (requires GTK)
+// #define CUSTOM_HOMOGRAPHY_NONINTERACTIVE   // Enable for non-interactive mode (uses defaults)
 
 // Include necessary OpenCV headers for warping and custom homography
 #if defined(WARPING) || defined(RENDER_PRESERVE_AS_CUSTOMHOMOGRAPHY)
