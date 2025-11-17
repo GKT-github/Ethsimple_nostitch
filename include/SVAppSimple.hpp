@@ -6,13 +6,20 @@
 #include <memory>
 #include <array>
 #include <string>
-// #define WARPING
-// #define WARPING_CUSTOM
+
+ /* #define WARPING &  #define WARPING_IPM ==== for load calibration, setup warpmaps based on IPM */
+/* #define RENDER_PRESERVE_AS_CUSTOMHOMOGRAPHY & CUSTOM_HOMOGRAPHY_NONINTERACTIVE ==== 
+            ===== preserve aspect ratio for custom homography and picks defult points from code & create yaml file*/
+/* #define RENDER_PRESERVE_AS_CUSTOMHOMOGRAPHY & CUSTOM_HOMOGRAPHY_INTERACTIVE ==== 
+            ===== preserve aspect ratio for custom homography and custome picks points from cam view & create yaml file*/
+
+
+//  #define WARPING
 // #define WARPING_SPERICAL
-// #define WARPING_IPM
+//  #define WARPING_IPM
 #define RENDER_PRESERVE_AS_CUSTOMHOMOGRAPHY
-#define CUSTOM_HOMOGRAPHY_INTERACTIVE  // Enable for interactive calibration (requires GTK)
-// #define CUSTOM_HOMOGRAPHY_NONINTERACTIVE   // Enable for non-interactive mode (uses defaults)
+// #define CUSTOM_HOMOGRAPHY_INTERACTIVE  // Enable for interactive calibration (requires GTK)
+#define CUSTOM_HOMOGRAPHY_NONINTERACTIVE   // Enable for non-interactive mode (uses defaults)
 
 // Include necessary OpenCV headers for warping and custom homography
 #if defined(WARPING) || defined(RENDER_PRESERVE_AS_CUSTOMHOMOGRAPHY)
