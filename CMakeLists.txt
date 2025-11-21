@@ -134,9 +134,9 @@ set(SOURCES
     src/SVAppSimple.cpp
     src/SVRenderSimple.cpp
     src/SVEthernetCamera.cpp
-    # src/SVStitcherSimple.cpp
-    # src/SVBlender.cpp
-    # src/SVGainCompensator.cpp
+    src/SVStitcherAuto.cpp
+    src/SVBlender.cpp
+    src/SVGainCompensator.cpp
     # src/Bowl.cpp
     src/OGLShader.cpp
     src/Model.cpp

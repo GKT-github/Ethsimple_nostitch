@@ -8,8 +8,8 @@
 #include <memory>
 #include <string>
 #include <array>
-#define RENDER_PRESERVE_AS //Aspect Ratio Preservation
-//#define RENDER_NOPRESERVE_AS
+#include "SVConfig.hpp"
+
 
 // Forward declarations to avoid full includes
 class OGLShader;
@@ -71,6 +71,33 @@ public:
      */
     bool shouldClose() const;
     
+    #ifdef EN_RENDER_STITCH
+        /**
+         * @brief Render split-screen view (50% normal + 50% stitched)
+         * @param camera_frames Array of 4 camera frames (warped)
+         * @param stitched_frame Stitched output frame
+         * @return true if successful
+         */
+        bool renderSplitScreen(const std::array<cv::cuda::GpuMat, 4>& camera_frames,
+                            const cv::cuda::GpuMat& stitched_frame);
+        
+        /**
+         * @brief Render split-viewport layout (left half: 3D car + 4 viewports, right half: stitched/black)
+         * @param camera_frames Array of 4 camera frames (warped)
+         * @param show_right Whether to show stitched output on right half
+         * @param stitched_frame Optional stitched frame (nullptr = black screen)
+         * @return true if successful
+         */
+        bool renderSplitViewportLayout(const std::array<cv::cuda::GpuMat, 4>& camera_frames,
+                                       bool show_right = false,
+                                       const cv::cuda::GpuMat* stitched_frame = nullptr);
+        
+        /**
+         * @brief Get GLFW window pointer (for keyboard input)
+         */
+        GLFWwindow* getWindow() const { return window; }
+    #endif
+
 private:
     void setupQuad();
     void setupCarModel(const std::string& model_path,
@@ -110,6 +137,9 @@ private:
     std::array<unsigned int, 4> camera_textures;
     std::array<unsigned int, 4> camera_pbos;
     
+    // Camera frame dimensions (may be scaled)
+    int camera_frame_width;
+    int camera_frame_height;
     
     bool is_init;
 };

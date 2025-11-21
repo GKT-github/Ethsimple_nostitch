@@ -6,6 +6,31 @@
 // Simple Surround View - Centralized Configuration
 // ============================================================
 
+
+/* #define WARPING &  #define WARPING_IPM ==== for load calibration, setup warpmaps based on IPM */
+/* #define RENDER_PRESERVE_AS_CUSTOMHOMOGRAPHY & CUSTOM_HOMOGRAPHY_NONINTERACTIVE ==== 
+            ===== preserve aspect ratio for custom homography and picks defult points from code & create yaml file*/
+/* #define RENDER_PRESERVE_AS_CUSTOMHOMOGRAPHY & CUSTOM_HOMOGRAPHY_INTERACTIVE ==== 
+            ===== preserve aspect ratio for custom homography and custome picks points from cam view & create yaml file*/
+/* #define RENDER_PRESERVE_AS_CUSTOMHOMOGRAPHY & CUSTOM_HOMOGRAPHY_INTERACTIVE & EN_STITCH & EN_RENDER_STITCH ==== 
+            ===== preserve aspect ratio for custom homography and custome picks points from cam view & create yaml file
+                    and show stitched output in a split screen */
+
+//  #define WARPING
+// #define WARPING_SPERICAL
+//  #define WARPING_IPM
+#define RENDER_PRESERVE_AS_CUSTOMHOMOGRAPHY
+// #define CUSTOM_HOMOGRAPHY_INTERACTIVE  // Enable for interactive calibration (requires GTK)
+#define CUSTOM_HOMOGRAPHY_NONINTERACTIVE   // Enable for non-interactive mode (uses defaults)
+
+
+#define RENDER_PRESERVE_AS //Aspect Ratio Preservation
+//#define RENDER_NOPRESERVE_AS
+#define EN_RENDER_STITCH
+
+// Debug switches
+// #define DG_framesVsWarped  // Debug: Compare warped_frames vs display_frames
+
 // ============================================================
 // CAMERA CONFIGURATION
 // ============================================================
@@ -50,10 +75,10 @@ static const CameraConfig CAMERA_CONFIGS[NUM_CAMERAS] = {
 // Processing scale factor (0.65 = balanced quality/speed)
 // Lower = faster but lower quality
 // Higher = slower but higher quality
-#define PROCESS_SCALE 0.65f
+#define PROCESS_SCALE 0.50f
 
 // Gain compensation update interval (seconds)
-#define GAIN_UPDATE_INTERVAL 10
+// #define GAIN_UPDATE_INTERVAL 10
 
 // ============================================================
 // RENDERING CONFIGURATION

@@ -5,11 +5,23 @@
 
 using namespace std::chrono_literals;
 
-SVAppSimple::SVAppSimple() : is_running(false) {
-    #if defined(WARPING) || defined(RENDER_PRESERVE_AS_CUSTOMHOMOGRAPHY)
-        scale_factor = 0.65f;  // ADD THIS
-    #endif
+#if defined(EN_STITCH) || defined(EN_RENDER_STITCH)
+    SVAppSimple::SVAppSimple() : is_running(false), show_stitched(false) {
+        stored_warped_frames.resize(NUM_CAMERAS);
+
+        #if defined(WARPING) || defined(RENDER_PRESERVE_AS_CUSTOMHOMOGRAPHY)
+            scale_factor = 0.50f;
+        #endif
+        
 }
+#else
+    SVAppSimple::SVAppSimple() : is_running(false) {
+        #if defined(WARPING) || defined(RENDER_PRESERVE_AS_CUSTOMHOMOGRAPHY)
+            scale_factor = 0.65f;  // ADD THIS
+        #endif
+    }
+#endif
+
 
 SVAppSimple::~SVAppSimple() {
     stop();
@@ -178,113 +190,6 @@ bool SVAppSimple::init() {
     return true;
 }
 
-void SVAppSimple::run() {
-    if (!is_running) {
-        std::cerr << "ERROR: System not initialized" << std::endl;
-        return;
-    }
- 
-
-    int frame_count = 0;
-    auto start_time = std::chrono::steady_clock::now();
-    auto last_fps_time = start_time;
-    
-    std::cout << "Starting main loop..." << std::endl;
-    #if defined(WARPING) || defined(RENDER_PRESERVE_AS_CUSTOMHOMOGRAPHY)
-        std::vector<cv::cuda::GpuMat> warped_frames(NUM_CAMERAS);
-    #endif
-    while (is_running && !renderer->shouldClose()) {
-        // Capture frames
-        if (!camera_source->capture(frames)) {
-            std::cerr << "WARNING: Frame capture failed" << std::endl;
-            std::this_thread::sleep_for(1ms);
-            continue;
-        }
-        
-        // Validate all frames
-        bool all_valid = true;
-        for (int i = 0; i < NUM_CAMERAS; i++) {
-            if (frames[i].gpuFrame.empty()) {
-                all_valid = false;
-                break;
-            }
-        }
-
-        if (!all_valid) {
-            std::this_thread::sleep_for(1ms);
-            continue;
-        }
-
-
-        #if defined(WARPING) || defined(RENDER_PRESERVE_AS_CUSTOMHOMOGRAPHY)
-            for (int i = 0; i < NUM_CAMERAS; i++) {
-                // 1. Resize to processing scale
-                cv::cuda::GpuMat scaled;
-                cv::cuda::resize(frames[i].gpuFrame, scaled, cv::Size(),
-                                scale_factor, scale_factor, cv::INTER_LINEAR);
-                
-                // 2. Apply spherical warp (bird's-eye transformation)
-                cv::cuda::remap(scaled, warped_frames[i],
-                            warp_x_maps[i], warp_y_maps[i],
-                            cv::INTER_LINEAR, cv::BORDER_CONSTANT);
-            }
-
-            // ========================================
-            // Prepare for rendering
-            // ========================================
-            std::array<cv::cuda::GpuMat, 4> display_frames;
-            
-            // USE WARPED FRAMES instead of raw frames
-            display_frames[0] = warped_frames[0];  // Front (warped)
-            display_frames[1] = warped_frames[1];  // Left (warped)
-            display_frames[2] = warped_frames[2];  // Rear (warped)
-            display_frames[3] = warped_frames[3];  // Right (warped)
-
-            // ========================================
-            // Render (your existing code)
-            // ========================================
-            if (!renderer->render(display_frames)) {
-                std::cerr << "ERROR: Rendering failed" << std::endl;
-                break;
-            }
-        
-    #else
-                
-            // Prepare frame array for renderer (just pass GPU frames directly!)
-            std::array<cv::cuda::GpuMat, 4> gpu_frames;
-            for (int i = 0; i < NUM_CAMERAS; i++) {
-                gpu_frames[i] = frames[i].gpuFrame;
-            }
-            // Render directly - no stitching!
-            if (!renderer->render(gpu_frames)) {
-                std::cerr << "ERROR: Rendering failed" << std::endl;
-                break;
-            }
-        #endif
-
-
-        
-        // FPS calculation and display
-        frame_count++;
-        if (frame_count % 30 == 0) {
-            auto now = std::chrono::steady_clock::now();
-            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                now - last_fps_time).count();
-            
-            if (elapsed > 0) {
-                float fps = (30.0f * 1000.0f) / elapsed;
-                // std::cout << "FPS: " << fps << std::endl;
-            }
-            
-            last_fps_time = now;
-        }
-        
-        // Small sleep to prevent CPU spinning
-        std::this_thread::sleep_for(1ms);
-    }
-    
-    std::cout << "\nMain loop exited" << std::endl;
-}
 
 void SVAppSimple::stop() {
     is_running = false;
@@ -297,140 +202,7 @@ void SVAppSimple::stop() {
     std::cout << "System stopped" << std::endl;
 }
 
-#ifdef WARPING
-    // ============================================================================
-    // NEW FUNCTION 1: Load Calibration from YAML Files
-    // ============================================================================
-    bool SVAppSimple::loadCalibration(const std::string& folder) {
-        K_matrices.resize(NUM_CAMERAS);
-        R_matrices.resize(NUM_CAMERAS);
-        
-        std::cout << "Loading calibration files..." << std::endl;
-        
-        for (int i = 0; i < NUM_CAMERAS; i++) {
-            std::string filename = folder + "/Camparam" + std::to_string(i) + ".yaml";
-            
-            cv::FileStorage fs(filename, cv::FileStorage::READ);
-            if (!fs.isOpened()) {
-                std::cerr << "ERROR: Failed to open: " << filename << std::endl;
-                std::cerr << "Run: cd camparameters && python3 generate_calibration.py" << std::endl;
-                return false;
-            }
-            
-            fs["FocalLength"] >> focal_length;
-            fs["Intrisic"] >> K_matrices[i];
-            fs["Rotation"] >> R_matrices[i];
-            
-            fs.release();
-            
-            std::cout << "  ✓ Camera " << i << ": " << filename << std::endl;
-        }
-        
-        std::cout << "  Focal length: " << focal_length << " pixels" << std::endl;
-        
-        return true;
-    }
 
-    // ============================================================================
-    // NEW FUNCTION 2: Setup Warp Maps for Bird's-Eye Transformation
-    // ============================================================================
-    #ifdef WARPING_SPERICAL
-
-        bool SVAppSimple::setupWarpMaps() {
-            warp_x_maps.resize(NUM_CAMERAS);
-            warp_y_maps.resize(NUM_CAMERAS);
-            
-            // Create spherical warper with scaled focal length
-            auto warper = cv::makePtr<cv::detail::SphericalWarper>(static_cast<float>(scale_factor * focal_length));
-            std::cout << "Creating spherical warp maps..." << std::endl;
-
-            // auto warper = cv::makePtr<cv::detail::CylindricalWarper>(static_cast<float>(scale_factor * focal_length));
-            // std::cout << "Creating PlaneWarper warp maps..." << std::endl;
-
-            
-            cv::Size input_size(CAMERA_WIDTH, CAMERA_HEIGHT);
-            cv::Size scaled_input(input_size.width * scale_factor, 
-                                input_size.height * scale_factor);
-            
-            for (int i = 0; i < NUM_CAMERAS; i++) {
-                // Scale intrinsic matrix
-                cv::Mat K_scaled = K_matrices[i].clone();
-                K_scaled.at<float>(0, 0) *= scale_factor;  // fx
-                K_scaled.at<float>(1, 1) *= scale_factor;  // fy
-                K_scaled.at<float>(0, 2) *= scale_factor;  // cx
-                K_scaled.at<float>(1, 2) *= scale_factor;  // cy
-                
-                // Build warp maps (pixel coordinate transformation)
-                cv::Mat xmap, ymap;
-                warper->buildMaps(scaled_input, K_scaled, R_matrices[i], xmap, ymap);
-                
-                // Upload to GPU for fast processing
-                warp_x_maps[i].upload(xmap);
-                warp_y_maps[i].upload(ymap);
-                
-                std::cout << "  ✓ Camera " << i << ": warp maps created" << std::endl;
-            }
-            
-            return true;
-        }
-    #endif
-
-    #ifdef WARPING_IPM
-        bool SVAppSimple::setupWarpMaps() {
-        warp_x_maps.resize(NUM_CAMERAS);
-        warp_y_maps.resize(NUM_CAMERAS);
-        
-        std::cout << "Creating IPM (bird's-eye) warp maps..." << std::endl;
-        
-        cv::Size scaled_input(CAMERA_WIDTH * scale_factor, 
-                            CAMERA_HEIGHT * scale_factor);
-        cv::Size output_size = scaled_input;
-        
-        for (int i = 0; i < NUM_CAMERAS; i++) {
-            // Simple inverse perspective mapping
-            // Map output rectangle to input trapezoid
-            
-            float w = scaled_input.width;
-            float h = scaled_input.height;
-            
-            // These control how much "ground" you see
-            float vanishing_point_y = h * 0.5f;  // Horizon line
-            float bottom_width_ratio = 1.0f;     // Bottom stays full width
-            float top_width_ratio = 0.6f;        // Top narrows (perspective)
-            
-            cv::Mat xmap(output_size, CV_32F);
-            cv::Mat ymap(output_size, CV_32F);
-            
-            for (int y = 0; y < output_size.height; y++) {
-                // Interpolate width based on y position
-                float t = static_cast<float>(y) / output_size.height;
-                float width_ratio = bottom_width_ratio + t * (top_width_ratio - bottom_width_ratio);
-                float half_width = w * width_ratio * 0.5f;
-                float center_x = w * 0.5f;
-                
-                // Map y to perspective y
-                float src_y = vanishing_point_y + (h - vanishing_point_y) * t;
-                
-                for (int x = 0; x < output_size.width; x++) {
-                    // Map x to perspective x
-                    float t_x = static_cast<float>(x) / output_size.width;
-                    float src_x = center_x + (t_x - 0.5f) * 2.0f * half_width;
-                    
-                    xmap.at<float>(y, x) = src_x;
-                    ymap.at<float>(y, x) = src_y;
-                }
-            }
-            
-            warp_x_maps[i].upload(xmap);
-            warp_y_maps[i].upload(ymap);
-            
-            std::cout << "  ✓ Camera " << i << ": IPM warp maps created" << std::endl;
-        }
-        
-        return true;
-        }
-    #endif
-#endif // end WARPING
 
 
 #ifdef RENDER_PRESERVE_AS_CUSTOMHOMOGRAPHY
@@ -478,7 +250,7 @@ bool SVAppSimple::setupCustomHomographyMaps() {
         // Build warp maps using the homography
         cv::Mat xmap(output_size, CV_32F);
         cv::Mat ymap(output_size, CV_32F);
-        
+        //=========GKT=====verify this homography mapping is it needed =================
         for (int y = 0; y < output_size.height; y++) {
             for (int x = 0; x < output_size.width; x++) {
                 // For each output pixel in bird's-eye view, find where it comes from in input
@@ -499,6 +271,7 @@ bool SVAppSimple::setupCustomHomographyMaps() {
                 }
             }
         }
+        
         
         // Upload to GPU
         warp_x_maps[i].upload(xmap);
@@ -623,13 +396,20 @@ bool SVAppSimple::setupCustomHomographyMaps() {
         manual_dst_points.resize(NUM_CAMERAS);
         
         // Create destination points (output bird's-eye view rectangle)
+        // IMPORTANT: Destination should span the FULL scaled output canvas
+        // Source is full frame (1280×800), so destination should be proportionally sized
         cv::Size scaled_input(CAMERA_WIDTH * scale_factor, CAMERA_HEIGHT * scale_factor);
+        
+        // All cameras map full frame to full output canvas (no zoom)
         manual_dst_points[0] = {
             cv::Point2f(0.0f, 0.0f),
             cv::Point2f(static_cast<float>(scaled_input.width), 0.0f),
             cv::Point2f(static_cast<float>(scaled_input.width), static_cast<float>(scaled_input.height)),
             cv::Point2f(0.0f, static_cast<float>(scaled_input.height))
         };
+        
+        std::cout << "Destination canvas size: " << scaled_input.width << "x" << scaled_input.height << std::endl;
+        
         // All cameras use same destination rectangle
         for (int i = 1; i < NUM_CAMERAS; i++) {
             manual_dst_points[i] = manual_dst_points[0];
@@ -639,34 +419,38 @@ bool SVAppSimple::setupCustomHomographyMaps() {
         // These are typical trapezoids that map ground plane to bird's-eye view
         // ADJUST THESE VALUES BASED ON YOUR CAMERA SETUP
         
+        std::cout << "\nSetting calibration points:" << std::endl;
+        std::cout << "Source (full frame): (0,0)→(1280,800)" << std::endl;
+        std::cout << "Destination (full canvas): (0,0)→(" << scaled_input.width << "," << scaled_input.height << ")" << std::endl;
+        
         // Camera 0: Front
         manual_src_points[0] = {
-            cv::Point2f(256.0f, 360.0f),   // Top-left
-            cv::Point2f(1024.0f, 360.0f),  // Top-right
+            cv::Point2f(0.0f, 0.0f),   // Top-left
+            cv::Point2f(1280.0f, 0.0f),  // Top-right
             cv::Point2f(1280.0f, 800.0f),  // Bottom-right
             cv::Point2f(0.0f, 800.0f)      // Bottom-left
         };
         
         // Camera 1: Left (90° left view)
         manual_src_points[1] = {
-            cv::Point2f(200.0f, 400.0f),   // Top-left
-            cv::Point2f(850.0f, 300.0f),   // Top-right
+            cv::Point2f(0.0f, 0.0f),   // Top-left
+            cv::Point2f(1280.0f, 0.0f),  // Top-right
             cv::Point2f(1280.0f, 800.0f),  // Bottom-right
             cv::Point2f(0.0f, 800.0f)      // Bottom-left
         };
         
         // Camera 2: Rear (opposite of front)
         manual_src_points[2] = {
-            cv::Point2f(256.0f, 360.0f),   // Top-left
-            cv::Point2f(1024.0f, 360.0f),  // Top-right
+            cv::Point2f(0.0f, 0.0f),   // Top-left
+            cv::Point2f(1280.0f, 0.0f),  // Top-right
             cv::Point2f(1280.0f, 800.0f),  // Bottom-right
             cv::Point2f(0.0f, 800.0f)      // Bottom-left
         };
         
         // Camera 3: Right (90° right view)
         manual_src_points[3] = {
-            cv::Point2f(430.0f, 300.0f),   // Top-left
-            cv::Point2f(1080.0f, 400.0f),  // Top-right
+            cv::Point2f(0.0f, 0.0f),   // Top-left
+            cv::Point2f(1280.0f, 0.0f),  // Top-right
             cv::Point2f(1280.0f, 800.0f),  // Bottom-right
             cv::Point2f(0.0f, 800.0f)      // Bottom-left
         };
@@ -750,4 +534,283 @@ bool SVAppSimple::loadCalibrationPoints(const std::string& folder) {
 }
 #endif
 
+#ifdef EN_STITCH
+    bool SVAppSimple::initStitcher() {
+        std::cout << "\n========================================" << std::endl;
+        std::cout << "Initializing Stitcher..." << std::endl;
+        std::cout << "========================================" << std::endl;
+        
+        if (!camera_source) {
+            std::cerr << "ERROR: Camera source not initialized" << std::endl;
+            return false;
+        }
+        
+        // Capture sample frames for stitcher initialization
+        std::array<Frame, NUM_CAMERAS> sample_frames;
+        int attempts = 0;
+        bool got_frames = false;
+        
+        while (attempts < 50 && !got_frames) {
+            if (camera_source->capture(sample_frames)) {
+                bool all_valid = true;
+                for (int i = 0; i < NUM_CAMERAS; i++) {
+                    if (sample_frames[i].gpuFrame.empty()) {
+                        all_valid = false;
+                        break;
+                    }
+                }
+                
+                if (all_valid) {
+                    got_frames = true;
+                }
+            }
+            
+            if (!got_frames) {
+                std::this_thread::sleep_for(100ms);
+                attempts++;
+            }
+        }
+        
+        if (!got_frames) {
+            std::cerr << "ERROR: Failed to get sample frames for stitcher" << std::endl;
+            return false;
+        }
+        
+        // Prepare sample frames as vector - SCALE FIRST just like in run()
+        std::vector<cv::cuda::GpuMat> sample_vec;
+        for (int i = 0; i < NUM_CAMERAS; i++) {
+            // Scale sample frames to match what will be used at runtime
+            cv::cuda::GpuMat scaled;
+            cv::cuda::resize(sample_frames[i].gpuFrame, scaled, cv::Size(),
+                            scale_factor, scale_factor, cv::INTER_LINEAR);
+            sample_vec.push_back(scaled);
+        }
+        
+        // Create stitcher
+        stitcher = std::make_shared<SVStitcherAuto>();
+        
+        #if defined(RENDER_PRESERVE_AS_CUSTOMHOMOGRAPHY)
+            // Initialize with warp maps from homography
+            // Pass scale_factor = 1.0 since frames are already scaled
+            if (!stitcher->init(sample_vec, warp_x_maps, warp_y_maps, 1.0f)) {
+                std::cerr << "ERROR: Failed to initialize stitcher" << std::endl;
+                return false;
+            }
+        #else
+            std::cerr << "ERROR: Stitching requires RENDER_PRESERVE_AS_CUSTOMHOMOGRAPHY mode" << std::endl;
+            return false;
+        #endif
+        
+        std::cout << "✓ Stitcher initialized successfully" << std::endl;
+        return true;
+    }
 
+    void SVAppSimple::run() {
+        if (!is_running) {
+            std::cerr << "ERROR: System not initialized" << std::endl;
+            return;
+        }
+        
+        int frame_count = 0;
+        auto start_time = std::chrono::steady_clock::now();
+        auto last_fps_time = start_time;
+        
+        std::cout << "\n========================================" << std::endl;
+        std::cout << "CONTROLS:" << std::endl;
+        std::cout << "  't' - Toggle stitched view (split screen)" << std::endl;
+        std::cout << "  ESC - Exit" << std::endl;
+        std::cout << "========================================\n" << std::endl;
+        
+        std::cout << "Starting main loop..." << std::endl;
+        
+        #if defined(WARPING) || defined(RENDER_PRESERVE_AS_CUSTOMHOMOGRAPHY)
+            std::vector<cv::cuda::GpuMat> warped_frames(NUM_CAMERAS);
+        #endif
+        
+        while (is_running && !renderer->shouldClose()) {
+            // ================================================
+            // KEYBOARD INPUT
+            // ================================================
+            if (glfwGetKey(renderer->getWindow(), GLFW_KEY_T) == GLFW_PRESS) {
+                // Debounce
+                static auto last_t_press = std::chrono::steady_clock::now();
+                auto now = std::chrono::steady_clock::now();
+                auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    now - last_t_press).count();
+                
+                if (elapsed > 500) { // 500ms debounce
+                    if (!show_stitched && !stitcher) {
+                        std::cout << "\n>>> Initializing stitcher for first time..." << std::endl;
+                        if (initStitcher()) {
+                            show_stitched = true;
+                            std::cout << ">>> Stitched view ENABLED" << std::endl;
+                        }
+                    } else if (stitcher) {
+                        show_stitched = !show_stitched;
+                        std::cout << ">>> Stitched view " 
+                                << (show_stitched ? "ENABLED" : "DISABLED") << std::endl;
+                    }
+                    last_t_press = now;
+                }
+            }
+            
+            // ================================================
+            // CAPTURE FRAMES
+            // ================================================
+            if (!camera_source->capture(frames)) {
+                std::cerr << "WARNING: Frame capture failed" << std::endl;
+                std::this_thread::sleep_for(1ms);
+                continue;
+            }
+            
+            // Validate frames
+            bool all_valid = true;
+            for (int i = 0; i < NUM_CAMERAS; i++) {
+                if (frames[i].gpuFrame.empty()) {
+                    all_valid = false;
+                    break;
+                }
+            }
+            
+            if (!all_valid) {
+                std::this_thread::sleep_for(1ms);
+                continue;
+            }
+            
+            #if defined(WARPING) || defined(RENDER_PRESERVE_AS_CUSTOMHOMOGRAPHY)
+                // ================================================
+                // WARP FRAMES
+                // ================================================
+                for (int i = 0; i < NUM_CAMERAS; i++) {
+                    // 1. Resize to processing scale
+                    cv::cuda::GpuMat scaled;
+                    cv::cuda::resize(frames[i].gpuFrame, scaled, cv::Size(),
+                                    scale_factor, scale_factor, cv::INTER_LINEAR);
+                    
+                    // 2. Apply  NON-INTERACTIVE CALIBRATION - Uses Default Points (No GTK Required) warp (bird's-eye transformation)
+                    cv::cuda::remap(scaled, warped_frames[i],
+                                warp_x_maps[i], warp_y_maps[i],
+                                cv::INTER_LINEAR, cv::BORDER_CONSTANT);
+                    
+                }
+                
+                // ================================================
+                // STITCHING (if enabled)
+                // ================================================
+                if (show_stitched && stitcher && stitcher->isInitialized()) {
+                    std::vector<cv::cuda::GpuMat> raw_vec, warped_vec;
+                    
+                    // Use the SAME frames that are being rendered
+                    // warped_frames are already scaled at scale_factor (0.5)
+                    for (int i = 0; i < NUM_CAMERAS; i++) {
+                        raw_vec.push_back(frames[i].gpuFrame);      // Original raw frames (for gain compensation reference)
+                        // raw_vec.push_back(warped_frames[i]);        // Use scaled & warped frames as "raw"
+                        warped_vec.push_back(warped_frames[i]);      // Already scaled & warped
+                    }
+                    
+                    if (!stitcher->stitch(raw_vec, warped_vec, stitched_output)) {
+                        std::cerr << "WARNING: Stitching failed" << std::endl;
+                        show_stitched = false; // Disable on error
+                    }
+                }
+                
+                // ================================================
+                // PREPARE FOR RENDERING
+                // ================================================
+                // USE RAW UNWARPED FRAMES for display to see full camera view
+                // Don't use warped_frames which are perspective-transformed and appear zoomed
+                std::array<cv::cuda::GpuMat, 4> display_frames;
+                for (int i = 0; i < NUM_CAMERAS; i++) {
+                    display_frames[i] = frames[i].gpuFrame;  // Use RAW frame - FULL VIEW
+                    // display_frames[i] = warped_frames[i];  // This would use warped/perspective view
+                }
+                
+                // DEBUG: Save warped_frames and display_frames as images
+                #ifdef DG_framesVsWarped
+                static bool debug_saved = false;
+                if (!debug_saved && frame_count > 5) {
+                    debug_saved = true;
+                    std::cout << "\n=== Saving Debug Images (Frame " << frame_count << ") ===" << std::endl;
+                    
+                    // Save only camera 0 for comparison
+                    int cam_idx = 0;
+                    
+                    // Download GPU frames to CPU
+                    cv::Mat warped_cpu, display_cpu;
+                    warped_frames[cam_idx].download(warped_cpu);
+                    display_frames[cam_idx].download(display_cpu);
+                    
+                    // Save images in build folder
+                    std::string warped_path = "./camera_" + std::to_string(cam_idx) + "_warped.png";
+                    std::string display_path = "./camera_" + std::to_string(cam_idx) + "_display.png";
+                    
+                    if (cv::imwrite(warped_path, warped_cpu)) {
+                        std::cout << "✓ Saved: " << warped_path << " (" << warped_cpu.size() << ")" << std::endl;
+                    } else {
+                        std::cerr << "✗ Failed to save: " << warped_path << std::endl;
+                    }
+                    
+                    if (cv::imwrite(display_path, display_cpu)) {
+                        std::cout << "✓ Saved: " << display_path << " (" << display_cpu.size() << ")" << std::endl;
+                    } else {
+                        std::cerr << "✗ Failed to save: " << display_path << std::endl;
+                    }
+                    
+                    std::cout << "===========================" << std::endl;
+                }
+                #endif
+                
+                // ================================================
+                // RENDER - Always use split-viewport layout
+                // ================================================
+                const cv::cuda::GpuMat* stitch_ptr = nullptr;
+                if (show_stitched && !stitched_output.empty()) {
+                    stitch_ptr = &stitched_output;
+                }
+                
+                if (!renderer->renderSplitViewportLayout(display_frames, show_stitched, stitch_ptr)) {
+                    std::cerr << "ERROR: Split-viewport rendering failed" << std::endl;
+                    break;
+                }
+                
+            #else
+                // Original non-warped rendering
+                std::array<cv::cuda::GpuMat, 4> gpu_frames;
+                for (int i = 0; i < NUM_CAMERAS; i++) {
+                    gpu_frames[i] = frames[i].gpuFrame;
+                }
+                
+                // Always use split-viewport layout (right panel black until 't' pressed)
+                if (!renderer->renderSplitViewportLayout(gpu_frames, show_stitched, nullptr)) {
+                    std::cerr << "ERROR: Split-viewport rendering failed" << std::endl;
+                    break;
+                }
+            #endif
+            
+            // ================================================
+            // FPS CALCULATION
+            // ================================================
+            frame_count++;
+            if (frame_count % 30 == 0) {
+                auto now = std::chrono::steady_clock::now();
+                auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    now - last_fps_time).count();
+                
+                if (elapsed > 0) {
+                    float fps = (30.0f * 1000.0f) / elapsed;
+                    std::cout << "FPS: " << fps 
+                            << (show_stitched ? " (STITCHED)" : " (NORMAL)") 
+                            << std::endl;
+                }
+                
+                last_fps_time = now;
+            }
+            
+            std::this_thread::sleep_for(1ms);
+        }
+        
+        std::cout << "\nMain loop exited" << std::endl;
+    }
+
+
+#endif

@@ -6,6 +6,7 @@
 #include <GL/glext.h>
 #include <GLFW/glfw3.h>
 #include <iostream>
+#include "SVConfig.hpp"
 // ✅ ADD THESE LINES:
 #include <opencv2/cudawarping.hpp>   // For cv::cuda::remap
 #include <opencv2/imgproc.hpp>        // For cv::INTER_LINEAR
@@ -62,6 +63,8 @@ SVRenderSimple::SVRenderSimple(int width, int height)
     , quad_VAO(0)
     , quad_VBO(0)
     , texture_shader(nullptr)
+    , camera_frame_width(1280)    // Default to original resolution
+    , camera_frame_height(800)
     , is_init(false) {
     
     camera_textures.fill(0);
@@ -289,6 +292,10 @@ void SVRenderSimple::uploadTexture(const cv::cuda::GpuMat& frame, unsigned int t
     static cv::cuda::GpuMat processed_frames[4];
     cv::cuda::GpuMat& processed_frame = processed_frames[pbo_idx];
     
+    #ifdef RENDER_PRESERVE_AS_CUSTOMHOMOGRAPHY
+    // Only apply rotation transformations if NOT using custom homography
+    // (Custom homography already includes rotations in warp maps)
+    
     if (pbo_idx == 0) {
         // Front camera: Vertical flip
         static cv::cuda::GpuMat map_x, map_y;
@@ -377,6 +384,12 @@ void SVRenderSimple::uploadTexture(const cv::cuda::GpuMat& frame, unsigned int t
         }
         cv::cuda::remap(frame, processed_frame, map_x, map_y, cv::INTER_LINEAR);
     }
+    
+    #else
+    // When using RENDER_PRESERVE_AS_CUSTOMHOMOGRAPHY: No rotation needed
+    // Frames already have rotations baked in from warp maps
+    processed_frame = frame;
+    #endif
     
     // Verify the processed frame is valid
     if (processed_frame.empty()) {
@@ -669,18 +682,24 @@ void SVRenderSimple::uploadTexture(const cv::cuda::GpuMat& frame, unsigned int t
 bool SVRenderSimple::render(const std::array<cv::cuda::GpuMat, 4>& camera_frames) {
     if (!is_init) return false;
     
-    // Upload all camera textures
+    // Upload all camera textures and detect frame dimensions
     for (int i = 0; i < 4; i++) {
         if (!camera_frames[i].empty()) {
+            // Auto-detect frame dimensions from first frame
+            if (i == 0) {
+                camera_frame_width = camera_frames[i].cols;
+                camera_frame_height = camera_frames[i].rows;
+            }
             uploadTexture(camera_frames[i], camera_textures[i]);
         }
     }
     
     // Clear entire screen
-    glClearColor(0.05f, 0.05f, 0.05f, 1.0f);
+    glClearColor(0.1f, 0.15f, 0.25f, 1.0f);  // Dark blue-gray background
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     
-    float camera_aspect = 1280.0f / 800.0f;  // 16:10 = 1.6
+    // Calculate camera aspect ratio from actual frame dimensions
+    float camera_aspect = (float)camera_frame_width / (float)camera_frame_height;
     
     #ifdef RENDER_PRESERVE_AS
         // ============================================================
@@ -868,3 +887,374 @@ bool SVRenderSimple::render(const std::array<cv::cuda::GpuMat, 4>& camera_frames
 bool SVRenderSimple::shouldClose() const {
     return window && glfwWindowShouldClose(window);
 }
+
+#ifdef EN_RENDER_STITCH
+    // ============================================================================
+    // ADD TO src/SVRenderSimple.cpp
+    // ============================================================================
+
+    bool SVRenderSimple::renderSplitScreen(const std::array<cv::cuda::GpuMat, 4>& camera_frames, const cv::cuda::GpuMat& stitched_frame) {
+        if (!is_init) return false;
+        
+        // Upload camera textures (same as normal render)
+        for (int i = 0; i < 4; i++) {
+            if (!camera_frames[i].empty()) {
+                uploadTexture(camera_frames[i], camera_textures[i]);
+            }
+        }
+        
+        // Upload stitched texture to a 5th texture
+        static unsigned int stitched_texture = 0;
+        static unsigned int stitched_pbo = 0;
+        
+        if (stitched_texture == 0) {
+            // Create texture for stitched output
+            glGenTextures(1, &stitched_texture);
+            glBindTexture(GL_TEXTURE_2D, stitched_texture);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            
+            // Create PBO for stitched output
+            glGenBuffers(1, &stitched_pbo);
+            glBindBuffer(GL_PIXEL_UNPACK_BUFFER, stitched_pbo);
+            glBufferData(GL_PIXEL_UNPACK_BUFFER,
+                        stitched_frame.cols * stitched_frame.rows * 3,
+                        nullptr, GL_STREAM_DRAW);
+            glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+        }
+        //  std::cout << "Create PBO for stitched output" << std::endl;
+
+        // Upload stitched frame
+        if (!stitched_frame.empty()) {
+            size_t required_size = stitched_frame.cols * stitched_frame.rows * 3;
+            
+            glBindBuffer(GL_PIXEL_UNPACK_BUFFER, stitched_pbo);
+            
+            // Reallocate if needed
+            GLint current_size = 0;
+            glGetBufferParameteriv(GL_PIXEL_UNPACK_BUFFER, GL_BUFFER_SIZE, &current_size);
+            if (current_size < required_size) {
+                glBufferData(GL_PIXEL_UNPACK_BUFFER, required_size, nullptr, GL_STREAM_DRAW);
+            }
+            
+            void* ptr = glMapBufferRange(GL_PIXEL_UNPACK_BUFFER, 0, required_size,
+                                        GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT);
+            
+            if (ptr) {
+                cv::Mat cpu_frame(stitched_frame.rows, stitched_frame.cols, CV_8UC3, ptr);
+                stitched_frame.download(cpu_frame);
+                glUnmapBuffer(GL_PIXEL_UNPACK_BUFFER);
+            }
+            
+            glBindTexture(GL_TEXTURE_2D, stitched_texture);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, stitched_frame.cols, stitched_frame.rows,
+                        0, GL_BGR, GL_UNSIGNED_BYTE, 0);
+            
+            glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+        }
+        
+        // ============================================================
+        // SPLIT SCREEN LAYOUT:
+        // Left 50%: Normal 4-camera view
+        // Right 50%: Stitched bird's-eye view
+        // ============================================================
+        
+        glClearColor(0.1f, 0.15f, 0.25f, 1.0f);  // Dark blue-gray background
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        glDisable(GL_DEPTH_TEST);
+        
+        int half_width = screen_width / 2;
+        // Calculate camera aspect ratio from actual frame dimensions
+        float camera_aspect = (float)camera_frame_width / (float)camera_frame_height;
+        
+        #ifdef RENDER_PRESERVE_AS
+            // ============================================
+            // LEFT HALF: 4-Camera Layout (Smaller)
+            // ============================================
+            int left_cam_w = half_width * 0.35;
+            int left_center_w = half_width * 0.30;
+            int left_cam_h = screen_height * 0.35;
+            int left_center_h = screen_height * 0.30;
+            
+            // Front (top center)
+            drawCameraViewWithAspect(camera_textures[0],
+                                    left_cam_w, 0,
+                                    left_center_w, left_cam_h,
+                                    camera_aspect);
+            
+            // Left (full height)
+            drawCameraViewWithAspect(camera_textures[1],
+                                    0, 0,
+                                    left_cam_w, screen_height,
+                                    camera_aspect);
+            
+            // Right (full height)
+            drawCameraViewWithAspect(camera_textures[3],
+                                    half_width - left_cam_w, 0,
+                                    left_cam_w, screen_height,
+                                    camera_aspect);
+            
+            // Rear (bottom center)
+            drawCameraViewWithAspect(camera_textures[2],
+                                    left_cam_w, screen_height - left_cam_h,
+                                    left_center_w, left_cam_h,
+                                    camera_aspect);
+            
+            // Small car in center
+            if (car_model && car_shader) {
+                int car_vp_w = 120;
+                int car_vp_h = 120;
+                int car_vp_x = left_cam_w + (left_center_w - car_vp_w) / 2;
+                int car_vp_y = (screen_height - car_vp_h) / 2;
+                
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, 0);
+                glViewport(car_vp_x, car_vp_y, car_vp_w, car_vp_h);
+                
+                glEnable(GL_SCISSOR_TEST);
+                glScissor(car_vp_x, car_vp_y, car_vp_w, car_vp_h);
+                glClearColor(0.2f, 0.2f, 0.3f, 1.0f);
+                glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+                glDisable(GL_SCISSOR_TEST);
+                
+                glEnable(GL_DEPTH_TEST);
+                
+                glm::mat4 view = camera.getView();
+                glm::mat4 projection = glm::perspective(
+                    glm::radians(camera.zoom),
+                    (float)car_vp_w / car_vp_h,
+                    0.1f, 100.0f
+                );
+                
+                car_shader->use();
+                car_shader->setMat4("model", car_transform);
+                car_shader->setMat4("view", view);
+                car_shader->setMat4("projection", projection);
+                car_shader->setVec3("lightPos", glm::vec3(0.0f, 50.0f, 0.0f));
+                car_shader->setVec3("viewPos", camera.position);
+                car_shader->setVec3("lightColor", glm::vec3(10.0f, 10.0f, 10.0f));
+                car_shader->setVec3("colorTint", glm::vec3(2.0f, 0.5f, 0.5f));
+                
+                Shader& shader_ref = *reinterpret_cast<Shader*>(car_shader.get());
+                car_model->Draw(shader_ref);
+                
+                glDisable(GL_DEPTH_TEST);
+            }
+            
+            // ============================================
+            // RIGHT HALF: Stitched Output (Large)
+            // ============================================
+            
+            glViewport(half_width, 0, half_width, screen_height);
+            
+            glm::mat4 transform = glm::mat4(1.0f);
+            
+            texture_shader->use();
+            texture_shader->setMat4("transform", transform);
+            
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, stitched_texture);
+            texture_shader->setInt("texture1", 0);
+            
+            glBindVertexArray(quad_VAO);
+            glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+            glBindVertexArray(0);
+            
+            // Draw border line
+            glViewport(0, 0, screen_width, screen_height);
+            glEnable(GL_SCISSOR_TEST);
+            glScissor(half_width - 2, 0, 4, screen_height);
+            glClearColor(1.0f, 1.0f, 0.0f, 1.0f); // Yellow line
+            glClear(GL_COLOR_BUFFER_BIT);
+            glDisable(GL_SCISSOR_TEST);
+            
+        #else
+            // Simple split without aspect preservation
+            // Left: 4-camera view
+            int side_w = half_width * 0.30;
+            int center_w = half_width * 0.40;
+            int row_h = screen_height / 3;
+            
+            drawCameraView(camera_textures[0], side_w, screen_height * 2/3, center_w, row_h);
+            drawCameraView(camera_textures[1], 0, row_h, side_w, row_h);
+            drawCameraView(camera_textures[2], side_w, 0, center_w, row_h);
+            drawCameraView(camera_textures[3], side_w + center_w, row_h, side_w, row_h);
+            
+            // Right: Stitched view
+            glViewport(half_width, 0, half_width, screen_height);
+            
+            glm::mat4 transform = glm::mat4(1.0f);
+            texture_shader->use();
+            texture_shader->setMat4("transform", transform);
+            
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, stitched_texture);
+            texture_shader->setInt("texture1", 0);
+            
+            glBindVertexArray(quad_VAO);
+            glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+            glBindVertexArray(0);
+        #endif
+        
+        glViewport(0, 0, screen_width, screen_height);
+        
+        glfwSwapBuffers(window);
+        glfwPollEvents();
+        
+        return true;
+    }
+
+    // ============================================================================
+    // SPLIT-VIEWPORT LAYOUT: Left half (3D car + 4 viewports) + Right half (stitched/black)
+    // ============================================================================
+
+    bool SVRenderSimple::renderSplitViewportLayout(const std::array<cv::cuda::GpuMat, 4>& camera_frames,
+                                                   bool show_right,
+                                                   const cv::cuda::GpuMat* stitched_frame) {
+        if (!is_init) return false;
+        
+        // Upload camera textures (same as normal render)
+        for (int i = 0; i < 4; i++) {
+            if (!camera_frames[i].empty()) {
+                uploadTexture(camera_frames[i], camera_textures[i]);
+            }
+        }
+        
+        // Clear entire screen to dark blue/gray background
+        glClearColor(0.1f, 0.15f, 0.25f, 1.0f);  // Dark blue-gray background
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        glDisable(GL_DEPTH_TEST);
+        
+        int half_width = screen_width / 2;
+        // Calculate camera aspect ratio from actual frame dimensions
+        float camera_aspect = 1280.0f / 800.0f;          // Landscape: 1.6:1 (Front/Rear)
+        float camera_aspect_rotated = 800.0f / 1280.0f;   // Portrait: 0.625:1 (Left/Right after 90° rotation)
+        
+        #ifdef RENDER_PRESERVE_AS
+            // ============================================
+            // LEFT HALF: 4-Camera Layout - Balanced sizes
+            // ============================================
+            int left_cam_w = half_width * 0.45;      // Side width: 45%
+            int left_center_w = half_width * 0.45;   // Center width: 45% (top/bottom cameras)
+            int left_center_h = screen_height * 0.30; // Front/Rear height: 30% each
+            
+            // Left/Right height: Fill remaining space between front and rear
+            // Total height - (front height + rear height) = middle space
+            int left_cam_h = screen_height - (2 * left_center_h);  // Use all remaining height
+            
+            // Front (top center) - Landscape aspect 1.6:1
+            drawCameraViewWithAspect(camera_textures[0],
+                                    left_cam_w / 2, 0,
+                                    left_center_w, left_center_h,
+                                    camera_aspect);
+            
+            // Left (middle, centered vertically in remaining space) - Portrait aspect 0.625:1
+            int left_cam_y = left_center_h;  // Start after front camera
+            drawCameraViewWithAspect(camera_textures[1],
+                                    0, left_cam_y,
+                                    left_cam_w, left_cam_h,
+                                    camera_aspect_rotated);
+            
+            // Right (middle, centered vertically in remaining space) - Portrait aspect 0.625:1
+            drawCameraViewWithAspect(camera_textures[3],
+                                    half_width - left_cam_w, left_cam_y,
+                                    left_cam_w, left_cam_h,
+                                    camera_aspect_rotated);
+            
+            // Rear (bottom center) - Landscape aspect 1.6:1
+            drawCameraViewWithAspect(camera_textures[2],
+                                    left_cam_w / 2, screen_height - left_center_h,
+                                    left_center_w, left_center_h,
+                                    camera_aspect);
+            
+            // Small car in center (between front and rear)
+            if (car_model && car_shader) {
+                int car_vp_w = 60;
+                int car_vp_h = 60;
+                int car_vp_x = half_width / 2 - car_vp_w / 2;
+                int car_vp_y = screen_height / 2 - car_vp_h / 2;
+                
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, 0);
+                glViewport(car_vp_x, car_vp_y, car_vp_w, car_vp_h);
+                
+                glEnable(GL_SCISSOR_TEST);
+                glScissor(car_vp_x, car_vp_y, car_vp_w, car_vp_h);
+                glClearColor(0.2f, 0.2f, 0.3f, 1.0f);
+                glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+                glDisable(GL_SCISSOR_TEST);
+                
+                glEnable(GL_DEPTH_TEST);
+                
+                glm::mat4 view = camera.getView();
+                glm::mat4 projection = glm::perspective(
+                    glm::radians(camera.zoom),
+                    (float)car_vp_w / car_vp_h,
+                    0.1f, 100.0f
+                );
+                
+                car_shader->use();
+                car_shader->setMat4("model", car_transform);
+                car_shader->setMat4("view", view);
+                car_shader->setMat4("projection", projection);
+                car_shader->setVec3("lightPos", glm::vec3(0.0f, 50.0f, 0.0f));
+                car_shader->setVec3("viewPos", camera.position);
+                car_shader->setVec3("lightColor", glm::vec3(10.0f, 10.0f, 10.0f));
+                car_shader->setVec3("colorTint", glm::vec3(2.0f, 0.5f, 0.5f));
+                
+                Shader& shader_ref = *reinterpret_cast<Shader*>(car_shader.get());
+                car_model->Draw(shader_ref);
+                
+                glDisable(GL_DEPTH_TEST);
+            }
+        #endif
+        
+        // ========================================================================
+        // RIGHT HALF: Black screen or stitched output
+        // ========================================================================
+        if (show_right && stitched_frame && !stitched_frame->empty()) {
+            // Create temporary OpenGL texture for stitched frame
+            unsigned int stitched_texture = 0;
+            glGenTextures(1, &stitched_texture);
+            
+            cv::Mat stitched_cpu;
+            stitched_frame->download(stitched_cpu);
+            
+            glBindTexture(GL_TEXTURE_2D, stitched_texture);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, stitched_cpu.cols, stitched_cpu.rows,
+                        0, GL_BGR, GL_UNSIGNED_BYTE, stitched_cpu.data);
+            
+            // Draw stitched frame on right half
+            glDisable(GL_DEPTH_TEST);
+            glViewport(half_width, 0, half_width, screen_height);
+            
+            glm::mat4 transform = glm::mat4(1.0f);
+            texture_shader->use();
+            texture_shader->setMat4("transform", transform);
+            
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, stitched_texture);
+            texture_shader->setInt("texture1", 0);
+            
+            glBindVertexArray(quad_VAO);
+            glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+            glBindVertexArray(0);
+            
+            glDeleteTextures(1, &stitched_texture);
+        }
+        // else: Right half stays black (default clear color already applied)
+        
+        // Reset viewport
+        glViewport(0, 0, screen_width, screen_height);
+        glEnable(GL_DEPTH_TEST);
+        
+        glfwSwapBuffers(window);
+        glfwPollEvents();
+        
+        return true;
+    }
+#endif

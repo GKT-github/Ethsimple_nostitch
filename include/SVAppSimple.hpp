@@ -3,23 +3,12 @@
 
 #include "SVEthernetCamera.hpp"
 #include "SVRenderSimple.hpp"
+#include "SVStitcherAuto.hpp"
+#include "SVConfig.hpp"
 #include <memory>
 #include <array>
 #include <string>
 
- /* #define WARPING &  #define WARPING_IPM ==== for load calibration, setup warpmaps based on IPM */
-/* #define RENDER_PRESERVE_AS_CUSTOMHOMOGRAPHY & CUSTOM_HOMOGRAPHY_NONINTERACTIVE ==== 
-            ===== preserve aspect ratio for custom homography and picks defult points from code & create yaml file*/
-/* #define RENDER_PRESERVE_AS_CUSTOMHOMOGRAPHY & CUSTOM_HOMOGRAPHY_INTERACTIVE ==== 
-            ===== preserve aspect ratio for custom homography and custome picks points from cam view & create yaml file*/
-
-
-//  #define WARPING
-// #define WARPING_SPERICAL
-//  #define WARPING_IPM
-#define RENDER_PRESERVE_AS_CUSTOMHOMOGRAPHY
-// #define CUSTOM_HOMOGRAPHY_INTERACTIVE  // Enable for interactive calibration (requires GTK)
-#define CUSTOM_HOMOGRAPHY_NONINTERACTIVE   // Enable for non-interactive mode (uses defaults)
 
 // Include necessary OpenCV headers for warping and custom homography
 #if defined(WARPING) || defined(RENDER_PRESERVE_AS_CUSTOMHOMOGRAPHY)
@@ -27,6 +16,9 @@
     #include <opencv2/stitching/detail/warpers.hpp>
     #include <vector>
 #endif
+
+#define EN_STITCH
+
 #define NUM_CAMERAS 4
 
 /**
@@ -86,7 +78,14 @@ private:
         bool loadCalibrationPoints(const std::string& folder);
         bool setupCustomHomographyMaps();
     #endif
-
+    #ifdef EN_STITCH
+        std::shared_ptr<SVStitcherAuto> stitcher;
+        bool show_stitched;
+        std::vector<cv::cuda::GpuMat> stored_warped_frames;
+        cv::cuda::GpuMat stitched_output;
+        void handleKeyboard();
+        bool initStitcher();
+    #endif
 
     
     // Rendering (no stitching!)
